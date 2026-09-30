@@ -1,0 +1,487 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { format } from "date-fns";
+import { ko } from "date-fns/locale";
+import { Search } from "lucide-react";
+import { kstWallClock } from "@/lib/date";
+import { deleteMerchants } from "./actions";
+import type {
+  Merchant360Application,
+  Merchant360Merchant,
+  MerchantDerivedSummary,
+  MerchantEquipmentCategorySummary,
+  MerchantEquipmentItem,
+  MerchantMemoEntry,
+  MerchantOperationStatus,
+  WorkHistoryItem,
+} from "./merchant360";
+import type { VanGroup } from "@/types";
+import { VAN_GROUP_LABEL } from "@/types";
+import { MERCHANT_OPERATION_STATUS_CLASS, MERCHANT_OPERATION_STATUS_LABEL } from "./merchant360";
+import MerchantInfoCard from "./MerchantInfoCard";
+import InstallInfoCard from "./InstallInfoCard";
+import ContractCard from "./ContractCard";
+import QuickActions from "./QuickActions";
+import InstallCompositionSection from "./InstallCompositionSection";
+import MerchantMemoSection from "./MerchantMemoSection";
+import MerchantInventorySection from "./MerchantInventorySection";
+import MerchantHistorySection from "./MerchantHistorySection";
+import EmptyState from "@/components/ui/EmptyState";
+import BulkDeleteActions from "@/components/ui/BulkDeleteActions";
+import BulkConfirmDialog from "@/components/ui/BulkConfirmDialog";
+import { VanBadge } from "@/components/ui/VanBadge";
+
+interface Props {
+  merchants: Merchant360Merchant[];
+  selectedId: string | null;
+  selectedMerchant: Merchant360Merchant | null;
+  selectedApplication: Merchant360Application | null;
+  history: WorkHistoryItem[];
+  memos: MerchantMemoEntry[];
+  equipment: MerchantEquipmentItem[];
+  equipmentCategorySummaries: MerchantEquipmentCategorySummary[];
+  derivedSummary: MerchantDerivedSummary | null;
+  page: number;
+  totalPages: number;
+  van: VanGroup | "";
+  vanCounts: { all: number | null; toss: number | null; kicc: number | null };
+  canDelete: boolean;
+  q: string;
+}
+
+function SummaryCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="mt-1 text-lg font-bold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function formatDateOnly(value: string | null | undefined) {
+  if (!value) return null;
+  const date = kstWallClock(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  return format(date, "yyyy-MM-dd", { locale: ko });
+}
+
+function MerchantDetailPanel({
+  merchant,
+  application,
+  history,
+  memos,
+  equipment,
+  equipmentCategorySummaries,
+  derivedSummary,
+  canDelete,
+  onRequestDelete,
+}: {
+  merchant: Merchant360Merchant | null;
+  application: Merchant360Application | null;
+  history: WorkHistoryItem[];
+  memos: MerchantMemoEntry[];
+  equipment: MerchantEquipmentItem[];
+  equipmentCategorySummaries: MerchantEquipmentCategorySummary[];
+  derivedSummary: MerchantDerivedSummary | null;
+  canDelete: boolean;
+  onRequestDelete: () => void;
+}) {
+  if (!merchant) {
+    return (
+      <div className="flex min-h-[420px] flex-1 items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white text-sm text-slate-400">
+        가맹점을 선택하면 상세 정보가 표시됩니다.
+      </div>
+    );
+  }
+
+  const operationStatus: MerchantOperationStatus = merchant.operation_status ?? "active";
+  const contractMonths = derivedSummary?.contractMonths ?? null;
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <div className="shrink-0 border-b border-slate-100 px-5 py-4 md:px-6">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="truncate text-lg font-bold text-slate-900">{merchant.business_name}</h2>
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${MERCHANT_OPERATION_STATUS_CLASS[operationStatus]}`}
+          >
+            {MERCHANT_OPERATION_STATUS_LABEL[operationStatus]}
+          </span>
+          {application?.program && (
+            <span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-semibold text-blue-600">
+              {application.program}
+            </span>
+          )}
+          {application?.channel_label && (
+            <span className="shrink-0 rounded-full bg-violet-50 px-2.5 py-1 text-[11px] font-semibold text-violet-600">
+              {application.channel_label}
+            </span>
+          )}
+          {canDelete && (
+            <button
+              type="button"
+              onClick={onRequestDelete}
+              className="ml-auto shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 transition-colors hover:border-red-200 hover:bg-red-50 hover:text-red-600"
+            >
+              삭제
+            </button>
+          )}
+        </div>
+        <p className="mt-1 truncate text-xs text-slate-400">
+          사업자번호 {merchant.business_number || "-"} · 대표자 {merchant.owner_name || "-"}
+        </p>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4 md:px-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <SummaryCard
+            label="최초 설치일"
+            value={formatDateOnly(derivedSummary?.firstInstalledAt) ?? "-"}
+          />
+          <SummaryCard
+            label="계약기간"
+            value={contractMonths !== null ? `${contractMonths}개월` : "-"}
+          />
+          <SummaryCard label="설치 구성" value={`${derivedSummary?.totalEquipmentSets ?? 0}세트`} />
+          <SummaryCard label="최근 A/S" value={formatDateOnly(derivedSummary?.lastAsAt) ?? "-"} />
+        </div>
+
+        <InstallCompositionSection
+          merchantId={merchant.id}
+          equipment={equipment}
+          categorySummaries={equipmentCategorySummaries}
+          totalEquipmentSets={derivedSummary?.totalEquipmentSets ?? 0}
+        />
+
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <MerchantInfoCard
+            merchant={merchant}
+            programLabel={application?.program ?? null}
+            applicationVanCompany={application?.van_company ?? null}
+            channelLabel={application?.channel_label ?? null}
+          />
+          <InstallInfoCard
+            merchant={merchant}
+            derivedSummary={derivedSummary}
+            caseType={application?.case_type ?? null}
+          />
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <ContractCard
+            merchant={merchant}
+            contractMonths={contractMonths}
+            internet={application?.internet ?? null}
+          />
+          <QuickActions
+            merchantId={merchant.id}
+            franchiseApplicationId={merchant.franchise_application_id}
+          />
+        </div>
+
+        <MerchantMemoSection merchantId={merchant.id} memos={memos} />
+        <MerchantInventorySection merchantId={merchant.id} />
+        <MerchantHistorySection history={history} />
+      </div>
+    </section>
+  );
+}
+
+export default function MerchantsClient({
+  merchants,
+  selectedId,
+  selectedMerchant,
+  selectedApplication,
+  history,
+  memos,
+  equipment,
+  equipmentCategorySummaries,
+  derivedSummary,
+  page,
+  van,
+  vanCounts,
+  canDelete,
+  q,
+}: Props) {
+  const router = useRouter();
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [search, setSearch] = useState(q);
+  const [detailDeleteOpen, setDetailDeleteOpen] = useState(false);
+  const [detailDeleting, setDetailDeleting] = useState(false);
+
+  useEffect(() => {
+    if (search === q) return;
+    const handle = setTimeout(() => {
+      const query = search.trim();
+      router.replace(
+        `/merchants?page=1${van ? `&van=${van}` : ""}${query ? `&q=${encodeURIComponent(query)}` : ""}`,
+      );
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [search, q, van, router]);
+
+  // 검색은 이제 서버에서 걸러 내려온다. filteredMerchants 이름은 아래 여러 곳(전체선택,
+  // 목록 렌더, EmptyState 등)에서 그대로 참조하므로 변수만 남겨둔다.
+  const filteredMerchants = merchants;
+
+  const allChecked =
+    filteredMerchants.length > 0 &&
+    filteredMerchants.every((merchant) => selected.has(merchant.id));
+
+  function selectMerchant(id: string) {
+    // van·q를 빼먹으면 목록에서 가맹점을 고르는 순간 필터가 전체로 풀린다.
+    router.replace(
+      `/merchants?page=${page}${van ? `&van=${van}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}&id=${id}`,
+    );
+  }
+
+  function selectVan(next: VanGroup | "") {
+    router.push(next ? `/merchants?page=1&van=${next}` : `/merchants?page=1`);
+  }
+
+  function toggleAll() {
+    setSelected(allChecked ? new Set() : new Set(filteredMerchants.map((merchant) => merchant.id)));
+  }
+
+  function toggleOne(id: string) {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function confirmDeleteOpen() {
+    if (selected.size > 0) setDeleteConfirmOpen(true);
+  }
+
+  async function confirmDelete() {
+    setDeleting(true);
+    const { error, deletedCount } = await deleteMerchants([...selected]);
+    setDeleting(false);
+    setDeleteConfirmOpen(false);
+    if (error) {
+      // 앞 묶음이 이미 지워졌을 수 있다. 몇 건이 지워졌는지 알리고 목록도 새로 고친다.
+      alert(
+        deletedCount > 0 ? `${deletedCount}건만 삭제됐습니다.\n\n${error}` : "삭제 실패: " + error,
+      );
+      if (deletedCount > 0) {
+        setSelected(new Set());
+        router.refresh();
+      }
+      return;
+    }
+    setSelected(new Set());
+    router.refresh();
+  }
+
+  async function confirmDetailDelete() {
+    if (!selectedMerchant) return;
+    setDetailDeleting(true);
+    const result = await deleteMerchants([selectedMerchant.id]);
+    setDetailDeleting(false);
+    setDetailDeleteOpen(false);
+    if (result.error) {
+      alert("삭제 실패: " + result.error);
+      return;
+    }
+    // 지운 가맹점이 URL에 남아 있으면 빈 상세가 뜬다. id를 떼고 목록 첫 화면으로 보낸다.
+    router.replace(`/merchants?page=1${van ? `&van=${van}` : ""}`);
+    router.refresh();
+  }
+
+  return (
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
+      <section className="flex min-h-[360px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        <div className="shrink-0 border-b border-slate-100 p-4">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="상호명, 대표자, 연락처, 주소 검색"
+              className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="mt-3 grid grid-cols-3 gap-1 rounded-[10px] bg-slate-100 p-[3px]">
+            {(
+              [
+                { value: "" as const, label: "전체", count: vanCounts.all },
+                { value: "toss" as const, label: VAN_GROUP_LABEL.toss, count: vanCounts.toss },
+                { value: "kicc" as const, label: VAN_GROUP_LABEL.kicc, count: vanCounts.kicc },
+              ] satisfies { value: VanGroup | ""; label: string; count: number | null }[]
+            ).map(({ value, label, count }) => {
+              const active = van === value;
+              const tone = value === "toss" ? "toss" : value === "kicc" ? "kicc" : "all";
+              const activeBg =
+                tone === "toss"
+                  ? "bg-blue-600 shadow-sm"
+                  : tone === "kicc"
+                    ? "bg-emerald-600 shadow-sm"
+                    : "bg-white shadow-sm";
+              const activeLabelColor = tone === "all" ? "text-slate-900" : "text-white";
+              const activeValueColor = tone === "all" ? "text-slate-500" : "text-white";
+              return (
+                <button
+                  key={value || "all"}
+                  type="button"
+                  onClick={() => selectVan(value)}
+                  className={`flex flex-col items-center gap-px rounded-[7px] px-1 py-1.5 transition-colors ${
+                    active ? activeBg : "hover:bg-slate-50"
+                  }`}
+                >
+                  <span
+                    className={`inline-flex items-center gap-1 text-xs ${active ? `font-bold ${activeLabelColor}` : "font-semibold text-slate-500"}`}
+                  >
+                    {!active && tone !== "all" && (
+                      <span
+                        className={`size-1.5 shrink-0 rounded-full ${tone === "toss" ? "bg-blue-600" : "bg-emerald-600"}`}
+                      />
+                    )}
+                    {label}
+                  </span>
+                  {count !== null && (
+                    <span
+                      className={`text-[11px] font-medium tabular-nums ${active ? activeValueColor : "text-slate-400"}`}
+                    >
+                      {count.toLocaleString()}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {filteredMerchants.length > 0 && (
+            <label className="mt-3 flex items-center gap-2 text-xs font-medium text-slate-400">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={toggleAll}
+                className="h-4 w-4 cursor-pointer accent-blue-600"
+              />
+              전체 선택
+            </label>
+          )}
+        </div>
+
+        {selected.size > 0 && (
+          <div className="shrink-0 px-4 pt-3">
+            <BulkDeleteActions
+              count={selected.size}
+              deleting={deleting}
+              onDelete={confirmDeleteOpen}
+              onCancel={() => setSelected(new Set())}
+            />
+          </div>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          {filteredMerchants.length === 0 ? (
+            <EmptyState
+              message={search.trim() ? "검색 결과가 없습니다" : "등록된 가맹점이 없습니다"}
+            />
+          ) : (
+            <div className="flex flex-col divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200">
+              {filteredMerchants.map((merchant) => {
+                const active = merchant.id === selectedId;
+                const checked = selected.has(merchant.id);
+                return (
+                  <div
+                    key={merchant.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-pressed={active}
+                    onClick={() => selectMerchant(merchant.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") selectMerchant(merchant.id);
+                    }}
+                    className={`group relative flex cursor-pointer items-center gap-3 px-3 py-2.5 text-left transition-colors ${active ? "bg-blue-50" : "hover:bg-slate-50"}`}
+                  >
+                    {active && <span className="absolute inset-y-0 left-0 w-1 bg-blue-500" />}
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleOne(merchant.id)}
+                      onClick={(event) => event.stopPropagation()}
+                      className={`h-4 w-4 shrink-0 cursor-pointer accent-blue-600 transition-opacity ${checked ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                    />
+                    <div
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500"}`}
+                    >
+                      {merchant.business_name.slice(0, 1)}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-slate-900">
+                        {merchant.business_name}
+                      </p>
+                      <p className="flex min-w-0 items-center gap-1 text-xs text-slate-400">
+                        <span className="truncate">{merchant.owner_name || "-"}</span>
+                        <VanBadge value={merchant.van_company} />
+                        {merchant.channel_label && (
+                          <span className="shrink-0 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold text-violet-600">
+                            {merchant.channel_label}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <MerchantDetailPanel
+        key={selectedMerchant?.id ?? "empty"}
+        merchant={selectedMerchant}
+        application={selectedApplication}
+        history={history}
+        memos={memos}
+        equipment={equipment}
+        equipmentCategorySummaries={equipmentCategorySummaries}
+        derivedSummary={derivedSummary}
+        canDelete={canDelete}
+        onRequestDelete={() => setDetailDeleteOpen(true)}
+      />
+
+      <BulkConfirmDialog
+        open={deleteConfirmOpen}
+        title="선택 항목 삭제"
+        busy={deleting}
+        confirmText="삭제"
+        confirmColor="red"
+        items={merchants
+          .filter((merchant) => selected.has(merchant.id))
+          .map((merchant) => ({ id: merchant.id, label: merchant.business_name }))}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        onConfirm={confirmDelete}
+      />
+
+      <BulkConfirmDialog
+        open={detailDeleteOpen}
+        title="가맹점 삭제"
+        subtitle="메모와 장비 이력도 함께 삭제됩니다. 되돌릴 수 없습니다."
+        busy={detailDeleting}
+        confirmText="삭제"
+        confirmColor="red"
+        confirmQuestion="정말 삭제하시겠습니까?"
+        items={
+          selectedMerchant
+            ? [{ id: selectedMerchant.id, label: selectedMerchant.business_name }]
+            : []
+        }
+        onCancel={() => setDetailDeleteOpen(false)}
+        onConfirm={confirmDetailDelete}
+      />
+    </div>
+  );
+}

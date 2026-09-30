@@ -1,0 +1,343 @@
+@import "tailwindcss";
+@import "pretendard/dist/web/static/pretendard.css";
+
+/* Tailwind v4는 기본 테두리색이 currentColor로 바뀌어 색상 없는 border 클래스가
+   거의 안 보이는 문제가 있음. v3처럼 기본 회색 테두리로 복원. */
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+}
+
+:root {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-foreground: #ffffff;
+  --primary-muted: #eff6ff;
+  --error: #dc2626;
+  --error-foreground: #ffffff;
+  --border-strong: #cbd5e1;
+  --surface-subtle: #f6f8fb;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-muted: var(--primary-muted);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
+  --color-border-strong: var(--border-strong);
+  --color-surface-subtle: var(--surface-subtle);
+  --shadow-card: var(--shadow-card);
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    "Pretendard",
+    "Apple SD Gothic Neo",
+    "Noto Sans KR",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* =================================================================
+   다크 모드
+   invert(1) + hue-rotate 트릭은 색조를 유지해준다는 장점은 있지만 순백
+   배경이 완전한 검정이 아니라 탁한 회색으로 반전되고, 파스텔 배지들이
+   탁한 톤으로 뒤섞여 가독성이 떨어졌다. 핑크 모드와 같은 방식으로
+   구조색(배경/카드/테두리/텍스트)을 진짜 검정 계열로 명시 지정하고,
+   브랜드 포인트색(블루)은 흰색 계열로 바꿔 검정 배경 위에서 강조가
+   또렷하게 보이도록 한다. 상태 배지는 저채도 배경 + 밝은 텍스트 조합으로
+   재배색해 검정 배경에서도 또렷하게 읽히게 한다.
+   ================================================================= */
+:root[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  color-scheme: dark;
+  --card: #18181b;
+  --border: #27272a;
+  --muted: #3f3f46;
+  --muted-foreground: #a1a1aa;
+  --primary: #f4f4f5;
+  --primary-hover: #ffffff;
+  --primary-foreground: #09090b;
+  --primary-muted: #27272a;
+  --error: #ef4444;
+  --error-foreground: #ffffff;
+  --border-strong: #52525b;
+  --surface-subtle: #141416;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.5);
+}
+
+:root[data-theme="dark"] .bg-white {
+  background-color: #16161a !important;
+}
+:root[data-theme="dark"] .bg-slate-50,
+:root[data-theme="dark"] .bg-gray-50 {
+  background-color: #0d0d0f !important;
+}
+:root[data-theme="dark"] .bg-slate-100,
+:root[data-theme="dark"] .bg-gray-100 {
+  background-color: #1e1e22 !important;
+}
+:root[data-theme="dark"] .bg-slate-200,
+:root[data-theme="dark"] .bg-gray-200 {
+  background-color: #2b2b30 !important;
+}
+
+:root[data-theme="dark"] .text-slate-900,
+:root[data-theme="dark"] .text-slate-800,
+:root[data-theme="dark"] .text-gray-900 {
+  color: #f4f4f5 !important;
+}
+:root[data-theme="dark"] .text-slate-700,
+:root[data-theme="dark"] .text-slate-600,
+:root[data-theme="dark"] .text-gray-600 {
+  color: #c4c4c9 !important;
+}
+:root[data-theme="dark"] .text-slate-500,
+:root[data-theme="dark"] .text-slate-400,
+:root[data-theme="dark"] .text-gray-400 {
+  color: #8a8a92 !important;
+}
+
+:root[data-theme="dark"] .border-slate-100,
+:root[data-theme="dark"] .border-slate-200,
+:root[data-theme="dark"] .border-slate-300,
+:root[data-theme="dark"] .border-gray-100,
+:root[data-theme="dark"] .border-gray-200 {
+  border-color: #2b2b30 !important;
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  background-color: #1e1e22;
+  color: #f4f4f5;
+  border-color: #2b2b30;
+}
+
+/* 브랜드 포인트색(파랑 → 흰색): 검정 배경 위에서 가장 강한 대비를 갖는 강조색 */
+:root[data-theme="dark"] .bg-blue-600,
+:root[data-theme="dark"] .bg-blue-700,
+:root[data-theme="dark"] .hover\:bg-blue-700:hover,
+:root[data-theme="dark"] .hover\:bg-blue-600:hover {
+  background-color: #f4f4f5 !important;
+  color: #09090b !important;
+}
+:root[data-theme="dark"] .bg-blue-50,
+:root[data-theme="dark"] .bg-blue-100 {
+  background-color: rgba(244, 244, 245, 0.1) !important;
+}
+:root[data-theme="dark"] .text-blue-600,
+:root[data-theme="dark"] .text-blue-700 {
+  color: #f4f4f5 !important;
+}
+:root[data-theme="dark"] .border-blue-200,
+:root[data-theme="dark"] .border-blue-400 {
+  border-color: rgba(244, 244, 245, 0.35) !important;
+}
+:root[data-theme="dark"] .ring-blue-400,
+:root[data-theme="dark"] .ring-blue-500,
+:root[data-theme="dark"] .focus\:ring-blue-500:focus {
+  --tw-ring-color: rgba(244, 244, 245, 0.6) !important;
+}
+:root[data-theme="dark"] .shadow-blue-200 {
+  --tw-shadow-color: rgba(244, 244, 245, 0.25) !important;
+}
+
+/* 상태 배지: 옅은 파스텔 배경은 검정 위에서 흐릿하므로 저채도 배경 + 밝은 텍스트로 재배색 */
+:root[data-theme="dark"] .bg-indigo-100 {
+  background-color: rgba(99, 102, 241, 0.18) !important;
+}
+:root[data-theme="dark"] .text-indigo-700 {
+  color: #a5b4fc !important;
+}
+:root[data-theme="dark"] .border-indigo-200 {
+  border-color: rgba(99, 102, 241, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-purple-100 {
+  background-color: rgba(168, 85, 247, 0.18) !important;
+}
+:root[data-theme="dark"] .text-purple-700 {
+  color: #d8b4fe !important;
+}
+
+:root[data-theme="dark"] .bg-orange-100 {
+  background-color: rgba(249, 115, 22, 0.18) !important;
+}
+:root[data-theme="dark"] .text-orange-700,
+:root[data-theme="dark"] .text-orange-600 {
+  color: #fdba74 !important;
+}
+
+:root[data-theme="dark"] .bg-amber-100 {
+  background-color: rgba(245, 158, 11, 0.18) !important;
+}
+:root[data-theme="dark"] .bg-yellow-100 {
+  background-color: rgba(234, 179, 8, 0.18) !important;
+}
+:root[data-theme="dark"] .text-yellow-700 {
+  color: #fde047 !important;
+}
+:root[data-theme="dark"] .border-yellow-200 {
+  border-color: rgba(234, 179, 8, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-lime-100 {
+  background-color: rgba(132, 204, 22, 0.18) !important;
+}
+:root[data-theme="dark"] .text-lime-700 {
+  color: #bef264 !important;
+}
+:root[data-theme="dark"] .border-lime-200 {
+  border-color: rgba(132, 204, 22, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-green-100 {
+  background-color: rgba(34, 197, 94, 0.18) !important;
+}
+:root[data-theme="dark"] .text-green-700,
+:root[data-theme="dark"] .text-green-600 {
+  color: #86efac !important;
+}
+:root[data-theme="dark"] .border-green-200 {
+  border-color: rgba(34, 197, 94, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-emerald-100 {
+  background-color: rgba(16, 185, 129, 0.18) !important;
+}
+:root[data-theme="dark"] .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+:root[data-theme="dark"] .border-emerald-200 {
+  border-color: rgba(16, 185, 129, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-teal-100 {
+  background-color: rgba(20, 184, 166, 0.18) !important;
+}
+:root[data-theme="dark"] .text-teal-700 {
+  color: #5eead4 !important;
+}
+:root[data-theme="dark"] .border-teal-200 {
+  border-color: rgba(20, 184, 166, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-cyan-100 {
+  background-color: rgba(6, 182, 212, 0.18) !important;
+}
+:root[data-theme="dark"] .text-cyan-700 {
+  color: #67e8f9 !important;
+}
+:root[data-theme="dark"] .border-cyan-200 {
+  border-color: rgba(6, 182, 212, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-sky-100 {
+  background-color: rgba(14, 165, 233, 0.18) !important;
+}
+:root[data-theme="dark"] .text-sky-700 {
+  color: #7dd3fc !important;
+}
+:root[data-theme="dark"] .border-sky-200 {
+  border-color: rgba(14, 165, 233, 0.4) !important;
+}
+
+:root[data-theme="dark"] .bg-red-100,
+:root[data-theme="dark"] .bg-red-50 {
+  background-color: rgba(239, 68, 68, 0.18) !important;
+}
+:root[data-theme="dark"] .text-red-700,
+:root[data-theme="dark"] .text-red-600,
+:root[data-theme="dark"] .text-red-500 {
+  color: #fca5a5 !important;
+}
+:root[data-theme="dark"] .border-red-200 {
+  border-color: rgba(239, 68, 68, 0.4) !important;
+}
+
+:root[data-theme="dark"] ::selection {
+  background: rgba(244, 244, 245, 0.35);
+}
+
+/* =================================================================
+   핑크 모드
+   배경/카드/본문 텍스트는 라이트 모드 그대로 흰색을 유지하고, 브랜드
+   포인트색(블루)만 채도 높은 마젠타로 바꿔 버튼·활성 탭·포커스 링 같은
+   강조 요소에만 핑크가 드러나게 한다. 전체 배경을 물들이면 "필터를
+   씌운 것 같은" 느낌이 나기 때문에 구조색(배경/테두리/텍스트)은 건드리지
+   않는다. 상태 배지(초록/보라/주황/빨강)도 의미 구분을 위해 그대로 둔다.
+   ================================================================= */
+:root[data-theme="pink"] {
+  color-scheme: light;
+
+  --primary: #c2148a;
+  --primary-hover: #9d0f70;
+  --primary-foreground: #ffffff;
+  --primary-muted: #fce7f3;
+}
+/* 브랜드 포인트색(파랑 → 진한 마젠타) */
+:root[data-theme="pink"] .bg-blue-600 {
+  background-color: #c2148a !important;
+}
+:root[data-theme="pink"] .bg-blue-700 {
+  background-color: #9d0f70 !important;
+}
+:root[data-theme="pink"] .hover\:bg-blue-700:hover {
+  background-color: #9d0f70 !important;
+}
+:root[data-theme="pink"] .hover\:bg-blue-600:hover {
+  background-color: #c2148a !important;
+}
+:root[data-theme="pink"] .bg-blue-50 {
+  background-color: #fce7f3 !important;
+}
+:root[data-theme="pink"] .bg-blue-100 {
+  background-color: #fbcfe8 !important;
+}
+:root[data-theme="pink"] .text-blue-600,
+:root[data-theme="pink"] .text-blue-700 {
+  color: #b3127e !important;
+}
+:root[data-theme="pink"] .border-blue-200,
+:root[data-theme="pink"] .border-blue-400 {
+  border-color: #f291cb !important;
+}
+:root[data-theme="pink"] .ring-blue-400,
+:root[data-theme="pink"] .ring-blue-500,
+:root[data-theme="pink"] .focus\:ring-blue-500:focus {
+  --tw-ring-color: #d6299e !important;
+}
+:root[data-theme="pink"] .shadow-blue-200 {
+  --tw-shadow-color: #f291cb !important;
+}
+
+:root[data-theme="pink"] ::selection {
+  background: #f291cb;
+}

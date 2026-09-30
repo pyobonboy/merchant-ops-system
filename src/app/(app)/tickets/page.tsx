@@ -1,0 +1,476 @@
+import { createClient } from "@/lib/supabase/server";
+import { getSessionUser, getSessionProfile } from "@/lib/auth/session";
+import { redirect } from "next/navigation";
+import Link from "next/link";
+import { Plus } from "lucide-react";
+import { STATUS_LABEL, type TicketStatus } from "@/types";
+import TicketsClient from "./TicketsClient";
+import AuthorStats, { type AuthorStatRange, type AuthorStatRow } from "./AuthorStats";
+import MyRevisionRequests, { type MyRevisionRow } from "./MyRevisionRequests";
+import ExportCsvButton from "./ExportCsvButton";
+import RevisionRequestsButton from "./RevisionRequestsButton";
+import { inspectTicket, type QualityIssue } from "@/lib/resolutionQuality";
+import { qualityInputHash, verdictFromStored } from "@/lib/qualityJudge";
+
+// 42P01: relation does not exist / PGRST205: PostgREST 스키마 캐시에 표가 없음.
+// 139번 마이그레이션(ticket_revision_requests)이 아직 적용되지 않은 환경에서 쓴다.
+function isMissingRevisionTable(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    /ticket_revision_requests|schema cache|relation .* does not exist/i.test(error.message ?? "")
+  );
+}
+
+type RawRevisionRow = {
+  id: string;
+  ticket_id: string;
+  message: string;
+  requested_by_name: string | null;
+  requested_at: string;
+  ticket:
+    | {
+        id: string;
+        title: string | null;
+        sales_id: string | null;
+        cs_id: string | null;
+        tech_id: string | null;
+      }[]
+    | {
+        id: string;
+        title: string | null;
+        sales_id: string | null;
+        cs_id: string | null;
+        tech_id: string | null;
+      }
+    | null;
+};
+
+interface Props {
+  searchParams: Promise<{
+    status?: string;
+    tab?: string;
+    page?: string;
+    q?: string;
+    stat?: string;
+  }>;
+}
+
+const PAGE_SIZE = 50;
+
+// 상단 팀 탭은 team 컬럼으로 거른다. 123번 마이그레이션(tickets.team)이 아직 적용되지
+// 않은 환경에서는 42703이 나므로 아래 상태 기반 매핑으로 폴백한다.
+const TAB_STATUSES: Record<string, TicketStatus[]> = {
+  cs: ["cs_pending", "cs_progress", "scheduled"],
+  tech: ["in_progress"],
+};
+
+// 처리 완료 후 기록하는 인입 로그라 파이프라인 단계 대신 결과 3구간만 필터로 쓴다.
+const LOG_STATUSES: TicketStatus[] = ["done", "in_progress", "canceled"];
+
+function isMissingColumnError(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    /column .* does not exist/i.test(error.message ?? "")
+  );
+}
+
+// 42703: 'column tickets.team does not exist' / PGRST204: "Could not find the 'team' column ..."
+function missingColumnName(error: { message?: string } | null): string | null {
+  const message = error?.message ?? "";
+  const match =
+    /Could not find the '([^']+)' column/.exec(message) ??
+    /column "?([A-Za-z0-9_.]+)"? does not exist/.exec(message);
+  return match?.[1]?.split(".").pop() ?? null;
+}
+
+// 작성 현황 집계에서 한 번에 읽어올 최대 건수. 넘으면 화면에 잘렸다고 알린다.
+const STAT_LIMIT = 5000;
+
+// KST 기준 이번 달/지난 달 경계
+function monthRangeKst(offset: number) {
+  const now = new Date();
+  const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const year = kstNow.getUTCFullYear();
+  const month = kstNow.getUTCMonth() + offset;
+  const start = new Date(Date.UTC(year, month, 1) - 9 * 60 * 60 * 1000);
+  const end = new Date(Date.UTC(year, month + 1, 1) - 9 * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+export default async function TicketsPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const tab = params.tab ?? "all";
+  const requestedPage = Math.max(1, Number(params.page) || 1);
+  const supabase = await createClient();
+
+  const user = await getSessionUser();
+  if (!user) redirect("/login");
+
+  const profile = await getSessionProfile();
+  if (!profile) redirect("/login");
+  const p = profile;
+
+  // 나에게 온 수정 요청 — 내가 담당자(sales/cs/tech)인 건 중 대기 중인 것.
+  // 대기 건은 마스터가 닫을 때마다 줄어 총량이 작으므로 열린 것을 다 받아 여기서 거른다.
+  const myRevisions: MyRevisionRow[] = [];
+  {
+    const { data: openRequests, error: revisionError } = await supabase
+      .from("ticket_revision_requests")
+      .select(
+        "id, ticket_id, message, requested_by_name, requested_at, ticket:tickets(id, title, sales_id, cs_id, tech_id)",
+      )
+      .eq("status", "open")
+      .order("requested_at", { ascending: false })
+      .limit(300);
+    if (!isMissingRevisionTable(revisionError) && openRequests) {
+      for (const row of openRequests as RawRevisionRow[]) {
+        const ticket = Array.isArray(row.ticket) ? row.ticket[0] : row.ticket;
+        if (!ticket) continue;
+        const isMine = [ticket.sales_id, ticket.cs_id, ticket.tech_id].includes(user.id);
+        if (!isMine) continue;
+        myRevisions.push({
+          id: row.id,
+          ticket_id: row.ticket_id,
+          ticket_title: ticket.title ?? null,
+          message: row.message,
+          requested_by_name: row.requested_by_name,
+          requested_at: row.requested_at,
+        });
+      }
+    }
+  }
+
+  // 검색은 서버에서 전체 범위로 수행한다 — 클라이언트에서 현재 페이지 50건만 거르면
+  // 다른 페이지의 티켓이 검색되지 않는다. 가맹점명·기사명은 조인 테이블이라 or()에
+  // 직접 걸 수 없어, 매칭되는 id를 먼저 뽑아 in 조건으로 합친다.
+  const searchTerm = (params.q ?? "").trim().slice(0, 100);
+  // .or() 안에서 쉼표·괄호·따옴표·백슬래시는 문법 문자라 그대로 넘기면 쿼리가 깨진다.
+  // 가맹점 360(merchants/page.tsx applySearch)에서 검증된 방식 — 문법 문자를 제거하고 비인용 패턴을 쓴다.
+  const searchSafe = searchTerm.replace(/[,()"'\\%*_]/g, "");
+  const searchPattern = `%${searchSafe}%`;
+  let searchMerchantIds: string[] = [];
+  let searchTechIds: string[] = [];
+  if (searchTerm) {
+    const [{ data: merchantRows }, { data: techRows }] = await Promise.all([
+      supabase
+        .from("merchants")
+        .select("id")
+        .or(`business_name.ilike.${searchPattern},phone.ilike.${searchPattern}`)
+        .limit(200),
+      supabase.from("profiles").select("id").ilike("name", searchPattern).limit(50),
+    ]);
+    searchMerchantIds = (merchantRows ?? []).map((r) => r.id);
+    searchTechIds = (techRows ?? []).map((r) => r.id);
+  }
+
+  function buildQuery(useTeamFilter: boolean, useSoftDeleteFilter: boolean) {
+    let q = supabase
+      .from("tickets")
+      .select(
+        "*, merchant:merchants(business_name, phone, owner_name), sales:profiles!tickets_sales_id_fkey(name), tech:profiles!tickets_tech_id_fkey(name)",
+        { count: "exact" },
+      )
+      .order("created_at", { ascending: false });
+
+    // 062 마이그레이션(deleted_at) 미적용 환경에서는 이 필터가 42703을 내므로 뺄 수 있게 한다.
+    if (useSoftDeleteFilter) q = q.is("deleted_at", null);
+
+    // 담당자 기준으로 본인 건만 걸러내지 않는다. 인입내역은 팀이 함께 보는 장부라
+    // 서로의 인입이 보여야 하고, 담당자가 아직 안 잡힌 건도 목록에서 빠지면 안 된다.
+    // 팀별로 나눠 볼 일은 아래 CS팀/기술지원 탭이 담당한다.
+
+    if (useTeamFilter && (tab === "cs" || tab === "tech")) {
+      q = q.eq("team", tab);
+      if (params.status) q = q.eq("status", params.status);
+    } else if (params.status) {
+      q = q.eq("status", params.status);
+    } else if (tab !== "all") {
+      q = q.in("status", TAB_STATUSES[tab] ?? []);
+    }
+
+    if (searchTerm) {
+      const orParts = [`title.ilike.${searchPattern}`];
+      if (searchMerchantIds.length) orParts.push(`merchant_id.in.(${searchMerchantIds.join(",")})`);
+      if (searchTechIds.length) orParts.push(`tech_id.in.(${searchTechIds.join(",")})`);
+      q = q.or(orParts.join(","));
+    }
+
+    return q;
+  }
+
+  let useTeamFilter = tab === "cs" || tab === "tech";
+  let useSoftDeleteFilter = true;
+  let countRes = await buildQuery(useTeamFilter, useSoftDeleteFilter).range(0, 0);
+  // 미적용 마이그레이션 컬럼(team/deleted_at)이 원인이면 해당 필터만 빼고 재시도한다.
+  for (let retry = 0; retry < 2 && isMissingColumnError(countRes.error); retry++) {
+    const missing = missingColumnName(countRes.error);
+    if (missing === "deleted_at" && useSoftDeleteFilter) useSoftDeleteFilter = false;
+    else if (missing === "team" && useTeamFilter) useTeamFilter = false;
+    else break;
+    countRes = await buildQuery(useTeamFilter, useSoftDeleteFilter).range(0, 0);
+  }
+  const totalCount = countRes.count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const page = Math.min(requestedPage, totalPages);
+
+  const { data: tickets, error: listError } = await buildQuery(
+    useTeamFilter,
+    useSoftDeleteFilter,
+  ).range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
+
+  // 조회 실패를 "0건"으로 보여주면 원인을 알 수 없다 — cs-report의 loadFailed와 같은 원칙.
+  const loadFailed = !!(countRes.error || listError);
+  const loadErrorMessage =
+    (countRes.error as { message?: string } | null)?.message ??
+    (listError as { message?: string } | null)?.message ??
+    "";
+
+  // 절차가 비어 있는 건은 inspectTicket이 판정하지 않는다 — 안 적은 것과 잘못 적은 것은 다르다.
+  const rows = (tickets ?? []) as Record<string, unknown>[];
+  const quality: Record<string, { issues: QualityIssue[]; hasOpenRequest: boolean }> = {};
+  for (const row of rows) {
+    const merchant = row.merchant as {
+      business_name?: string | null;
+      owner_name?: string | null;
+    } | null;
+    const title = (row.title as string | null) ?? "";
+    const steps = (row.resolution_steps as string | null) ?? "";
+    const stored = verdictFromStored(row.quality_verdict);
+    const useStored = !!stored && row.quality_hash === qualityInputHash(title, steps);
+    const issues = useStored
+      ? stored.issues
+      : inspectTicket({
+          title,
+          steps,
+          businessName: merchant?.business_name ?? null,
+          ownerName: merchant?.owner_name ?? null,
+        });
+    if (issues.length === 0) continue;
+    quality[row.id as string] = { issues, hasOpenRequest: false };
+  }
+
+  // 이 페이지 티켓 중 대기 중인 수정 요청이 걸린 것. 미달 여부와 무관하게 본다 —
+  // 고쳐서 통과했지만 아직 안 닫힌 건도 목록에서 취소할 수 있어야 한다.
+  // ticket_revision_requests(139번 마이그레이션)가 아직 없는 환경에서는 에러를 무시하고 빈 값으로 둔다.
+  const pageTicketIds = rows.map((row) => row.id as string);
+  const openRequestTicketIds: string[] = [];
+  if (pageTicketIds.length > 0) {
+    const { data: openRows } = await supabase
+      .from("ticket_revision_requests")
+      .select("ticket_id")
+      .eq("status", "open")
+      .in("ticket_id", pageTicketIds);
+    for (const r of (openRows ?? []) as { ticket_id: string }[]) {
+      if (!openRequestTicketIds.includes(r.ticket_id)) openRequestTicketIds.push(r.ticket_id);
+      if (quality[r.ticket_id]) quality[r.ticket_id].hasOpenRequest = true;
+    }
+  }
+
+  // 전체 취소 버튼에 쓸 대기 중 수정 요청 총건수. 페이지 범위가 아니라 전체를 센다. 마스터만 본다.
+  let openRequestTotal = 0;
+  if (p.role === "master") {
+    const { count: openCount } = await supabase
+      .from("ticket_revision_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open");
+    openRequestTotal = openCount ?? 0;
+  }
+
+  const TABS =
+    p.role === "tech"
+      ? [
+          { key: "all", label: "전체" },
+          { key: "tech", label: "기술지원" },
+        ]
+      : [
+          { key: "all", label: "전체" },
+          { key: "cs", label: "CS팀" },
+          { key: "tech", label: "기술지원" },
+        ];
+
+  // 탭·상태·페이지 이동 시 검색어가 풀리지 않도록 모든 링크에 q를 유지한다.
+  const qParam = searchTerm ? `&q=${encodeURIComponent(searchTerm)}` : "";
+
+  const statusFilters: TicketStatus[] = LOG_STATUSES;
+
+  // 작성 현황은 마스터만 본다. 등록하면 등록자가 자기 팀 담당으로 들어가므로
+  // 담당자(sales_id/cs_id/tech_id) 기준 집계가 사실상 작성자 집계다.
+  const statRange: AuthorStatRange =
+    params.stat === "prev" ? "prev" : params.stat === "all" ? "all" : "month";
+  let statRows: AuthorStatRow[] = [];
+  let statTruncated = false;
+  if (p.role === "master") {
+    let statQuery = supabase
+      .from("tickets")
+      .select("sales_id,cs_id,tech_id,team")
+      .limit(STAT_LIMIT);
+    if (useSoftDeleteFilter) statQuery = statQuery.is("deleted_at", null);
+    if (statRange !== "all") {
+      const { start, end } = monthRangeKst(statRange === "prev" ? -1 : 0);
+      statQuery = statQuery.gte("created_at", start).lt("created_at", end);
+    }
+    const { data: statData } = await statQuery;
+    const rows = (statData ?? []) as {
+      sales_id: string | null;
+      cs_id: string | null;
+      tech_id: string | null;
+      team: string | null;
+    }[];
+    statTruncated = rows.length >= STAT_LIMIT;
+
+    const ids = [
+      ...new Set(
+        rows
+          .map((row) => row.sales_id ?? row.cs_id ?? row.tech_id)
+          .filter((id): id is string => !!id),
+      ),
+    ];
+    const nameById = new Map<string, string>();
+    if (ids.length > 0) {
+      const { data: people } = await supabase.from("profiles").select("id,name").in("id", ids);
+      for (const person of (people ?? []) as { id: string; name: string | null }[]) {
+        if (person.name) nameById.set(person.id, person.name);
+      }
+    }
+
+    const counts = new Map<string, AuthorStatRow>();
+    for (const row of rows) {
+      const ownerId = row.sales_id ?? row.cs_id ?? row.tech_id;
+      const name = ownerId ? (nameById.get(ownerId) ?? "알 수 없음") : "담당자 없음";
+      const entry = counts.get(name) ?? { name, cs: 0, tech: 0, total: 0 };
+      if (row.team === "tech") entry.tech += 1;
+      else if (row.team === "cs") entry.cs += 1;
+      entry.total += 1;
+      counts.set(name, entry);
+    }
+    statRows = [...counts.values()].sort((a, b) => b.total - a.total);
+  }
+
+  return (
+    <div className="p-6 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">인입내역</h1>
+          <p className="text-slate-500 text-sm mt-1">총 {totalCount}건</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {p.role === "master" && <RevisionRequestsButton openCount={openRequestTotal} />}
+          {(p.role === "sales" ||
+            p.role === "cs" ||
+            p.role === "tech" ||
+            p.role === "admin" ||
+            p.role === "master") && <ExportCsvButton />}
+          {(p.role === "admin" || p.role === "master" || p.role === "cs" || p.can_delete) && (
+            <Link
+              href="/tickets/trash"
+              className="text-sm text-slate-500 px-3 py-2.5 rounded-xl hover:bg-slate-100 transition-colors font-medium"
+            >
+              휴지통
+            </Link>
+          )}
+          {(p.role === "sales" ||
+            p.role === "cs" ||
+            p.role === "tech" ||
+            p.role === "admin" ||
+            p.role === "master") && (
+            <Link
+              href="/tickets/new"
+              className="flex items-center gap-2 bg-blue-600 text-white text-sm px-4 py-2.5 rounded-xl hover:bg-blue-700 transition-colors font-semibold shadow-sm shadow-blue-200"
+            >
+              <Plus size={16} />새 인입내역
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <MyRevisionRequests rows={myRevisions} />
+
+      {p.role === "master" && (
+        <AuthorStats rows={statRows} range={statRange} truncated={statTruncated} />
+      )}
+
+      {}
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl mb-5 w-fit">
+        {TABS.map((t) => (
+          <Link
+            key={t.key}
+            href={`/tickets?tab=${t.key}${qParam}`}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+              tab === t.key
+                ? "bg-white text-slate-900 shadow-sm ring-1 ring-black/5"
+                : "text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            {t.label}
+          </Link>
+        ))}
+      </div>
+
+      {}
+      {statusFilters.length > 0 && (
+        <div className="flex gap-1 overflow-x-auto pb-2 mb-5">
+          <Link
+            href={`/tickets?tab=${tab}${qParam}`}
+            className={`whitespace-nowrap text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${!params.status ? "bg-blue-50 text-blue-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}
+          >
+            전체
+          </Link>
+          {statusFilters.map((s) => (
+            <Link
+              key={s}
+              href={`/tickets?tab=${tab}&status=${s}${qParam}`}
+              className={`whitespace-nowrap text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${params.status === s ? "bg-blue-50 text-blue-700" : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}
+            >
+              {STATUS_LABEL[s]}
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {loadFailed && (
+        <div className="mb-5 rounded-2xl border border-red-300 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">
+          목록을 불러오지 못했습니다. 아래는 빈 목록이 아니라 조회 실패입니다.
+          {loadErrorMessage && (
+            <span className="mt-1 block font-normal text-red-600">{loadErrorMessage}</span>
+          )}
+        </div>
+      )}
+
+      {}
+      <TicketsClient
+        tickets={(tickets ?? []) as any}
+        initialSearch={searchTerm}
+        quality={quality}
+        isMaster={p.role === "master"}
+        openRequestTicketIds={openRequestTicketIds}
+        openRequestTotal={openRequestTotal}
+        currentUserId={user.id}
+      />
+
+      {}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-6">
+          <Link
+            href={`/tickets?tab=${tab}${params.status ? `&status=${params.status}` : ""}${qParam}&page=${Math.max(1, page - 1)}`}
+            className={`text-sm px-3 py-1.5 rounded-lg border border-slate-200 font-medium ${page <= 1 ? "text-slate-300 pointer-events-none" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            이전
+          </Link>
+          <span className="text-sm text-slate-500 font-medium">
+            {page} / {totalPages}
+          </span>
+          <Link
+            href={`/tickets?tab=${tab}${params.status ? `&status=${params.status}` : ""}${qParam}&page=${Math.min(totalPages, page + 1)}`}
+            className={`text-sm px-3 py-1.5 rounded-lg border border-slate-200 font-medium ${page >= totalPages ? "text-slate-300 pointer-events-none" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            다음
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}

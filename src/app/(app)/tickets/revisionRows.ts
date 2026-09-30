@@ -1,0 +1,189 @@
+import type { createClient } from "@/lib/supabase/server";
+import { inspectTicket } from "@/lib/resolutionQuality";
+import { qualityInputHash, verdictFromStored } from "@/lib/qualityJudge";
+import { fetchAllRows, fetchByIdChunks } from "@/lib/fetchAllRows";
+import type { RevisionRow } from "./revisions/RevisionsClient";
+
+// 수정 요청 목록 조립. 현황 페이지(/tickets/revisions)와 인입내역의 상세창이 같이 쓴다.
+// "요청 후 수정됐는지"와 "지금 품질"을 여기서 계산하므로 두 화면의 판정이 어긋나지 않는다.
+
+export const REVISION_STATUS_FILTERS = ["open", "resolved", "canceled", "all"] as const;
+export type RevisionStatusFilter = (typeof REVISION_STATUS_FILTERS)[number];
+
+// 42P01: relation does not exist / PGRST205: PostgREST 스키마 캐시에 표가 없음.
+// 139번 마이그레이션(ticket_revision_requests)이 아직 적용되지 않은 환경에서 쓴다.
+export function isMissingRevisionTable(error: { code?: string; message?: string } | null) {
+  if (!error) return false;
+  return (
+    error.code === "42P01" ||
+    error.code === "PGRST205" ||
+    /ticket_revision_requests|schema cache|relation .* does not exist/i.test(error.message ?? "")
+  );
+}
+
+type TicketMerchant = { business_name?: string | null; owner_name?: string | null };
+type JoinedProfile = { name?: string | null };
+
+type TicketJoin = {
+  id: string;
+  title: string | null;
+  resolution_steps: string | null;
+  updated_at: string | null;
+  merchant: TicketMerchant[] | TicketMerchant | null;
+  sales: JoinedProfile[] | JoinedProfile | null;
+  cs: JoinedProfile[] | JoinedProfile | null;
+  tech: JoinedProfile[] | JoinedProfile | null;
+};
+
+function ticketInfo(value: TicketJoin[] | TicketJoin | null) {
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+function merchantInfo(value: TicketMerchant[] | TicketMerchant | null | undefined) {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+}
+
+function profileInfo(value: JoinedProfile[] | JoinedProfile | null | undefined) {
+  return Array.isArray(value) ? (value[0] ?? null) : (value ?? null);
+}
+
+export async function loadRevisionRows(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  status: RevisionStatusFilter,
+): Promise<{ rows: RevisionRow[]; schemaReady: boolean; openCount: number }> {
+  const { data, error } = await fetchAllRows<Record<string, unknown>>(
+    (from, to) => {
+      let q = supabase
+        .from("ticket_revision_requests")
+        .select(
+          "*, ticket:tickets(id, title, resolution_steps, updated_at, merchant:merchants(business_name, owner_name), sales:profiles!tickets_sales_id_fkey(name), cs:profiles!tickets_cs_id_fkey(name), tech:profiles!tickets_tech_id_fkey(name))",
+        )
+        .order("requested_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to);
+      if (status !== "all") q = q.eq("status", status);
+      return q;
+    },
+    { label: "revision rows" },
+  );
+  const schemaReady = !isMissingRevisionTable(error);
+
+  let openCount = 0;
+  if (schemaReady) {
+    const { count } = await supabase
+      .from("ticket_revision_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open");
+    openCount = count ?? 0;
+  }
+
+  type RawRow = {
+    id: string;
+    ticket_id: string;
+    ticket: TicketJoin[] | TicketJoin | null;
+    message: string;
+    status: "open" | "resolved" | "canceled";
+    requested_by_name: string | null;
+    requested_at: string;
+    resolved_by_name: string | null;
+    resolved_at: string | null;
+    resolved_note: string | null;
+    canceled_by_name?: string | null;
+    canceled_at?: string | null;
+    canceled_note?: string | null;
+    before_title?: string | null;
+    before_steps?: string | null;
+  };
+
+  // 148 미적용 환경에서는 이 조회가 실패한다. 그때는 규칙 판정으로 떨어진다.
+  const ticketIds = [
+    ...new Set(
+      ((data ?? []) as RawRow[])
+        .map((row) => ticketInfo(row.ticket)?.id)
+        .filter((id): id is string => !!id),
+    ),
+  ];
+  const verdictByTicketId = new Map<string, { verdict: unknown; hash: string | null }>();
+  if (schemaReady && ticketIds.length > 0) {
+    const { data: verdictRows } = await fetchByIdChunks<{
+      id: string;
+      quality_verdict: unknown;
+      quality_hash: string | null;
+    }>(ticketIds, (chunk) =>
+      supabase.from("tickets").select("id, quality_verdict, quality_hash").in("id", chunk),
+    );
+    for (const row of verdictRows ?? []) {
+      verdictByTicketId.set(row.id, {
+        verdict: row.quality_verdict,
+        hash: row.quality_hash ?? null,
+      });
+    }
+  }
+
+  const rows: RevisionRow[] = schemaReady
+    ? ((data ?? []) as RawRow[]).map((row) => {
+        const ticket = ticketInfo(row.ticket);
+        const merchant = merchantInfo(ticket?.merchant);
+        const salesName = profileInfo(ticket?.sales)?.name ?? null;
+        const csName = profileInfo(ticket?.cs)?.name ?? null;
+        const techName = profileInfo(ticket?.tech)?.name ?? null;
+
+        // 요청 이후에 인입내역이 바뀌었는지. tickets.updated_at은 수정할 때마다 트리거로 갱신된다.
+        const editedAt =
+          ticket?.updated_at &&
+          new Date(ticket.updated_at).getTime() > new Date(row.requested_at).getTime()
+            ? ticket.updated_at
+            : null;
+        // 지금 내용에 규칙을 다시 돌린다. 절차가 비어 있으면 "통과"가 아니라 "절차 없음"이다.
+        const steps = ticket?.resolution_steps ?? "";
+        const title = ticket?.title ?? "";
+        const stored = ticket ? verdictFromStored(verdictByTicketId.get(ticket.id)?.verdict) : null;
+        const useStored =
+          !!stored &&
+          verdictByTicketId.get(ticket?.id ?? "")?.hash === qualityInputHash(title, steps);
+        const issues = !steps.trim()
+          ? []
+          : useStored
+            ? stored.issues
+            : inspectTicket({
+                title,
+                steps,
+                businessName: merchant?.business_name ?? null,
+                ownerName: merchant?.owner_name ?? null,
+              });
+        const currentQuality: "pass" | "fail" | "empty" = !steps.trim()
+          ? "empty"
+          : issues.length
+            ? "fail"
+            : "pass";
+
+        return {
+          id: row.id as string,
+          ticket_id: row.ticket_id as string,
+          ticket_title: ticket?.title ?? null,
+          message: row.message as string,
+          status: row.status as "open" | "resolved" | "canceled",
+          requested_by_name: (row.requested_by_name as string | null) ?? null,
+          requested_at: row.requested_at as string,
+          resolved_by_name: (row.resolved_by_name as string | null) ?? null,
+          resolved_at: (row.resolved_at as string | null) ?? null,
+          resolved_note: (row.resolved_note as string | null) ?? null,
+          edited_at: editedAt,
+          current_quality: currentQuality,
+          current_issue_labels: issues.map((issue) => issue.label),
+          canceled_by_name: row.canceled_by_name ?? null,
+          canceled_at: row.canceled_at ?? null,
+          canceled_note: row.canceled_note ?? null,
+          before_title: row.before_title ?? null,
+          before_steps: row.before_steps ?? null,
+          current_title: ticket?.title ?? null,
+          current_steps: ticket?.resolution_steps ?? null,
+          // 등록하면 등록자가 자기 팀 담당으로 들어가므로 담당자 이름이 곧 작성자 이름이다.
+          assignee_name:
+            [salesName, csName, techName].filter((n): n is string => !!n).join(" · ") || null,
+        };
+      })
+    : [];
+
+  return { rows, schemaReady, openCount };
+}

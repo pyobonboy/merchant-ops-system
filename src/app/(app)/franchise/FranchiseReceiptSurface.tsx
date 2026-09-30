@@ -1,0 +1,1347 @@
+"use client";
+
+import { useState } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CircleHelpIcon,
+  DownloadIcon,
+  ClockIcon,
+  FileTextIcon,
+  FileWarningIcon,
+  ListFilterIcon,
+  PercentIcon,
+  PhoneCallIcon,
+  PlusIcon,
+  SearchIcon,
+  Star,
+  StickyNoteIcon,
+  TrendingDownIcon,
+  TrendingUpIcon,
+  TrophyIcon,
+  UserXIcon,
+  XCircleIcon,
+} from "lucide-react";
+import type {
+  ApplicantType,
+  FranchiseApplication,
+  FranchiseCaseType,
+  FranchiseChannel,
+  FranchiseStatus,
+  Profile,
+  VanGroup,
+} from "@/types";
+import {
+  APPLICANT_TYPE_LABEL,
+  FRANCHISE_CASE_TYPE_LABEL,
+  FRANCHISE_CHANNEL_LABEL,
+  FRANCHISE_STATUS_LABEL,
+  VAN_COMPANIES,
+  VAN_GROUP_LABEL,
+} from "@/types";
+import RateBadge from "@/components/ui/RateBadge";
+import { AppSelect } from "@/components/ui/AppSelect";
+import { DatePickerField } from "@/components/ui/DatePickerField";
+import { VanBadge } from "@/components/ui/VanBadge";
+
+const VAN_TONE = {
+  all: {
+    activeBox: "border-slate-900 bg-white",
+    idleBox: "border-slate-200 bg-white hover:border-slate-300",
+    activeLabel: "text-slate-900",
+    idleLabel: "text-slate-500",
+    activeValue: "text-slate-900",
+    idleValue: "text-slate-500",
+    dot: "",
+  },
+  toss: {
+    activeBox: "border-blue-600 bg-blue-50",
+    idleBox: "border-slate-200 bg-white hover:border-blue-300",
+    activeLabel: "text-blue-700",
+    idleLabel: "text-blue-600",
+    activeValue: "text-blue-700",
+    idleValue: "text-slate-500",
+    dot: "bg-blue-600",
+  },
+  kicc: {
+    activeBox: "border-emerald-600 bg-emerald-50",
+    idleBox: "border-slate-200 bg-white hover:border-emerald-300",
+    activeLabel: "text-emerald-700",
+    idleLabel: "text-emerald-600",
+    activeValue: "text-emerald-700",
+    idleValue: "text-slate-500",
+    dot: "bg-emerald-600",
+  },
+} as const;
+
+type TableView =
+  | "all"
+  | "mine"
+  | "doc_incomplete"
+  | "doc_waiting"
+  | "approved"
+  | "persistent_absence"
+  | "canceled";
+type KpiKey =
+  | "today_received"
+  | "doc_waiting"
+  | "doc_incomplete"
+  | "reviewing"
+  | "today_completed"
+  | "persistent_absence";
+type SortBy = "updated_at" | "created_at" | "open_date" | "install_date" | "status" | "manual";
+
+export interface StageStats {
+  todayReceived: number;
+  todayReceivedTrend: number;
+  docWaiting: number;
+  docIncomplete: number;
+  reviewing: number;
+  todayCompleted: number;
+  todayCompletedTrend: number;
+  canceled: number;
+  persistentAbsence: number;
+  total: number;
+  approvedTotal: number;
+  overallCompletionRate: number;
+  todayCompletionRate: number | null;
+}
+
+export type ColumnSortKey =
+  | "reception_date"
+  | "open_date"
+  | "channel"
+  | "case_type"
+  | "business_name"
+  | "owner_name"
+  | "phone"
+  | "cs"
+  | "internet"
+  | "status"
+  | "next_check_date"
+  | "next_check_color";
+
+export type ColumnSortState = { key: ColumnSortKey; dir: "desc" | "asc" } | null;
+
+const SORTABLE_HEADERS: { label: string; key: ColumnSortKey }[] = [
+  { label: "접수일", key: "reception_date" },
+  { label: "오픈 예정일", key: "open_date" },
+  { label: "채널", key: "channel" },
+  { label: "구분", key: "case_type" },
+  { label: "상호명", key: "business_name" },
+  { label: "대표자", key: "owner_name" },
+  { label: "연락처", key: "phone" },
+  { label: "담당자", key: "cs" },
+  { label: "인터넷", key: "internet" },
+  { label: "상태", key: "status" },
+  { label: "확인일", key: "next_check_date" },
+];
+
+function formatLastCallAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  // 서버 함수는 시드니(UTC+10)에서 돌고 사용자는 한국이라 시간대를 못 박지 않으면 서버 HTML과 브라우저
+  // 렌더 결과가 달라 하이드레이션이 깨지고 React가 표 전체를 다시 그린다.
+  return date.toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+interface Props {
+  rows: FranchiseApplication[];
+  allRows: FranchiseApplication[];
+  filteredCount: number;
+  selected: Set<string>;
+  allChecked: boolean;
+  page: number;
+  totalPages: number;
+  kpiCounts: Record<KpiKey, number>;
+  stageStats: StageStats;
+  successRateStats: { rate: number | null; total: number; success: number };
+  successRateFrom: string;
+  successRateTo: string;
+  onSuccessRateFromChange: (value: string) => void;
+  onSuccessRateToChange: (value: string) => void;
+  activeKpi: KpiKey | null;
+  tableView: TableView;
+  tableViewCounts: Record<TableView, number>;
+  search: string;
+  memoSearch: string;
+  statusFilter: string;
+  applicantTypeFilter: string;
+  largeFilter: string;
+  channelFilter: string;
+  caseTypeFilter: string;
+  missedCallFilter: string;
+  vanFilter: string;
+  vanGroupFilter: VanGroup | "";
+  vanGroupCounts: { all: number; toss: number; kicc: number };
+  dateFrom: string;
+  dateTo: string;
+  sortBy: SortBy;
+  csProfiles: Pick<Profile, "id" | "name" | "role">[];
+  linkedInstalls: Record<string, { id: string; status: string }>;
+  linkedInternets: Record<string, { id: string; status: string | null; category: string | null }>;
+  busyId: string | null;
+  onHelp: () => void;
+  onNew: () => void;
+  onNewExisting: () => void;
+  onKpiChange: (key: KpiKey) => void;
+  onTableViewChange: (view: TableView, kpi?: KpiKey | null) => void;
+  onSearchChange: (value: string) => void;
+  onMemoSearchChange: (value: string) => void;
+  onStatusFilterChange: (value: string) => void;
+  onApplicantTypeFilterChange: (value: string) => void;
+  onLargeFilterChange: (value: string) => void;
+  onChannelFilterChange: (value: string) => void;
+  onCaseTypeFilterChange: (value: string) => void;
+  onMissedCallFilterChange: (value: string) => void;
+  onVanFilterChange: (value: string) => void;
+  onVanGroupFilterChange: (value: VanGroup | "") => void;
+  onDateFromChange: (value: string) => void;
+  onDateToChange: (value: string) => void;
+  onSortChange: (value: SortBy) => void;
+  onToggleAll: () => void;
+  onToggleRow: (id: string) => void;
+  todayDate: string;
+  columnSort: ColumnSortState;
+  onColumnSortChange: (key: ColumnSortKey) => void;
+  onSaveField: (
+    row: FranchiseApplication,
+    field: keyof FranchiseApplication,
+    value: string,
+  ) => void | Promise<void>;
+  onSaveNextCheckDate: (row: FranchiseApplication, value: string) => void | Promise<void>;
+  onToggleLargeFranchise: (row: FranchiseApplication) => void | Promise<void>;
+  mode?: "default" | "large_franchise";
+  onApplicantTypeChange: (row: FranchiseApplication, value: ApplicantType) => void | Promise<void>;
+  onCsChange: (row: FranchiseApplication, value: string) => void | Promise<void>;
+  onStatusChange: (row: FranchiseApplication, value: FranchiseStatus) => void;
+  onOpenDetail: (row: FranchiseApplication) => void;
+  onOpenMemo: (id: string) => void;
+  onOpenCall: (id: string) => void;
+  onPageChange: (page: number) => void;
+  onSelectAllFiltered: () => void;
+  onBulkStatus: () => void;
+  onBulkAssign: () => void;
+  onBulkDelete: () => void;
+  onBulkTransfer: () => void;
+  onExcelDownload: () => void;
+  archivedNotice?: React.ReactNode;
+}
+
+const HIDDEN_STATUSES: FranchiseStatus[] = [
+  "info_input",
+  "internet_apply_done",
+  "internet_done",
+  "card_internet_apply_done",
+];
+const STATUS_OPTIONS = (Object.keys(FRANCHISE_STATUS_LABEL) as FranchiseStatus[]).filter(
+  (status) => !HIDDEN_STATUSES.includes(status),
+);
+const buttonBase =
+  "focus-visible:ring-primary/30 inline-flex shrink-0 items-center justify-center gap-2 rounded-lg border font-semibold transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50";
+const secondaryButton = `${buttonBase} border-border bg-card text-foreground hover:bg-muted h-9 px-4 text-sm`;
+const primaryButton = `${buttonBase} border-primary bg-primary text-primary-foreground hover:bg-primary-hover h-9 px-4 text-sm`;
+const iconButton = `${buttonBase} border-border bg-card text-foreground hover:bg-muted size-9 p-0`;
+
+function statusTone(status: FranchiseStatus) {
+  if (status === "doc_waiting")
+    return {
+      pill: "!bg-[#ff0000] !text-[#ffffff]",
+      solid: "bg-[#ff0000]",
+      border: "border-[#ff0000]",
+      stage: 0,
+    };
+  if (status === "doc_incomplete")
+    return {
+      pill: "!bg-red-500/15 !text-red-500",
+      solid: "bg-red-500",
+      border: "border-red-500",
+      stage: 0,
+    };
+  if (status === "card_apply_done")
+    return {
+      pill: "!bg-blue-500/15 !text-blue-500",
+      solid: "bg-blue-500",
+      border: "border-blue-500",
+      stage: 1,
+    };
+  if (status === "toss_review_apply_done")
+    return {
+      pill: "!bg-violet-500/15 !text-violet-500",
+      solid: "bg-violet-500",
+      border: "border-violet-500",
+      stage: 2,
+    };
+  if (status === "card_done")
+    return {
+      pill: "!bg-sky-500/15 !text-sky-500",
+      solid: "bg-sky-500",
+      border: "border-sky-500",
+      stage: 2,
+    };
+  if (status === "toss_review_done")
+    return {
+      pill: "!bg-teal-500/15 !text-teal-500",
+      solid: "bg-teal-500",
+      border: "border-teal-500",
+      stage: 2,
+    };
+  if (status === "completed" || status === "internet_done")
+    return {
+      pill: "!bg-green-500/15 !text-green-500",
+      solid: "bg-green-500",
+      border: "border-green-500",
+      stage: 3,
+    };
+  if (status === "persistent_absence")
+    return {
+      pill: "!bg-orange-500/15 !text-orange-500",
+      solid: "bg-orange-500",
+      border: "border-orange-500",
+      stage: 0,
+    };
+  return {
+    pill: "!bg-zinc-500/15 !text-zinc-500",
+    solid: "bg-zinc-500",
+    border: "border-zinc-500",
+    stage: 0,
+  };
+}
+
+// 확인일 경과 정도: -1 = 미지정, 0 = 정상, 1 = 확인일이 오늘~내일(초록), 2 = 3일 이상 경과(노랑), 3 = 7일 이상 경과(빨강)
+export function nextCheckSeverity(
+  nextCheckDate: string | null | undefined,
+  todayDate: string,
+): -1 | 0 | 1 | 2 | 3 {
+  if (!nextCheckDate) return -1;
+  const nextMs = new Date(`${nextCheckDate}T00:00:00+09:00`).getTime();
+  const todayMs = new Date(`${todayDate}T00:00:00+09:00`).getTime();
+  const daysPast = Math.floor((todayMs - nextMs) / (24 * 60 * 60 * 1000));
+  if (daysPast >= 7) return 3;
+  if (daysPast >= 3) return 2;
+  if (daysPast >= -1 && daysPast <= 0) return 1;
+  return 0;
+}
+
+function nextCheckBadgeClass(severity: ReturnType<typeof nextCheckSeverity>): string {
+  if (severity === 3) return "!border-red-300 !bg-red-100 !text-red-700 font-bold animate-pulse";
+  if (severity === 2) return "!border-amber-300 !bg-amber-100 !text-amber-700 font-semibold";
+  if (severity === 1) return "!border-green-300 !bg-green-100 !text-green-700 font-semibold";
+  return "";
+}
+
+function columnSortIndicator(columnSort: ColumnSortState, key: ColumnSortKey) {
+  const active = columnSort?.key === key;
+  if (!active) return <ChevronDownIcon className="text-muted-foreground/35 size-3.5" />;
+  return columnSort!.dir === "desc" ? (
+    <ChevronDownIcon className="text-primary size-3.5" />
+  ) : (
+    <ChevronUpIcon className="text-primary size-3.5" />
+  );
+}
+
+const MEMO_STAMP_RE = /\[(.+?) (\d{2})\. (\d{2})\. (\d{2}):(\d{2})\]/g;
+const PIN_RE = /^PIN:(\d+):/;
+const LEGACY_PIN_MARKER = "PIN::";
+
+function hasPinMarker(text: string): boolean {
+  return text.startsWith(LEGACY_PIN_MARKER) || PIN_RE.test(text);
+}
+
+// PIN 마커가 붙어 있으면 pinned=true와 함께 마커를 뗀 텍스트를 반환한다
+function stripPinPrefix(text: string): { pinned: boolean; text: string } {
+  if (text.startsWith(LEGACY_PIN_MARKER))
+    return { pinned: true, text: text.slice(LEGACY_PIN_MARKER.length) };
+  const m = text.match(PIN_RE);
+  if (m) return { pinned: true, text: text.slice(m[0].length) };
+  return { pinned: false, text };
+}
+
+// 메모 드로어에서 상단 고정(북마크)한 항목만 표에 노출하기 위해 항목별 pinned 여부를 함께 반환한다
+function pinnedMemoEntries(memo: string | undefined | null): string[] {
+  if (!memo?.trim()) return [];
+  const matches = [...memo.matchAll(MEMO_STAMP_RE)];
+  const entries: { text: string; pinned: boolean }[] = [];
+  if (matches.length === 0) {
+    const { pinned, text } = stripPinPrefix(memo.trim());
+    entries.push({ text, pinned });
+  } else {
+    const leadingRaw = memo.slice(0, matches[0].index).trim();
+    if (leadingRaw) {
+      const { pinned, text } = stripPinPrefix(leadingRaw);
+      entries.push({ text, pinned });
+    }
+    matches.forEach((m, i) => {
+      const start = m.index! + m[0].length;
+      const end = i + 1 < matches.length ? matches[i + 1].index! : memo.length;
+      const text = memo.slice(start, end).trim();
+      if (text) entries.push({ text, pinned: hasPinMarker(m[1]) });
+    });
+  }
+  return entries
+    .filter((entry) => entry.pinned)
+    .reverse()
+    .map((entry) => entry.text);
+}
+
+function pageRange(current: number, total: number) {
+  let start = Math.max(1, current - 2);
+  const end = Math.min(total, start + 4);
+  start = Math.max(1, end - 4);
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+export default function FranchiseReceiptSurface(props: Props) {
+  const [advancedOpen, setAdvancedOpen] = useState(true);
+  const tabs = [
+    { key: "all", label: "전체", count: props.allRows.length, view: "all" as TableView },
+    { key: "mine", label: "내 업무", count: props.tableViewCounts.mine, view: "mine" as TableView },
+    {
+      key: "docMissing",
+      label: "서류 미비",
+      count: props.tableViewCounts.doc_incomplete,
+      view: "doc_incomplete" as TableView,
+    },
+    {
+      key: "review",
+      label: "심사 대기",
+      count: props.kpiCounts.reviewing,
+      view: "all" as TableView,
+      kpi: "reviewing" as KpiKey,
+    },
+    {
+      key: "techDone",
+      label: "승인 완료",
+      count: props.tableViewCounts.approved,
+      view: "approved" as TableView,
+    },
+    {
+      key: "persistentAbsence",
+      label: "지속적 부재",
+      count: props.tableViewCounts.persistent_absence,
+      view: "persistent_absence" as TableView,
+    },
+    {
+      key: "canceled",
+      label: "취소",
+      count: props.tableViewCounts.canceled,
+      view: "canceled" as TableView,
+    },
+  ];
+  const activeTab =
+    props.activeKpi === "reviewing"
+      ? "review"
+      : props.tableView === "doc_incomplete"
+        ? "docMissing"
+        : props.tableView === "approved"
+          ? "techDone"
+          : props.tableView === "persistent_absence"
+            ? "persistentAbsence"
+            : props.tableView === "canceled"
+              ? "canceled"
+              : props.tableView;
+  const trendBadge = (value: number) => {
+    if (value === 0) return null;
+    const up = value > 0;
+    const Icon = up ? TrendingUpIcon : TrendingDownIcon;
+    return (
+      <span
+        className={`inline-flex items-center gap-0.5 text-xs font-semibold ${up ? "text-emerald-600" : "text-red-500"}`}
+      >
+        <Icon className="size-3" />
+        {Math.abs(value)}
+      </span>
+    );
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-5 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-foreground text-2xl font-bold tracking-tight">
+            {props.mode === "large_franchise" ? "대형 가맹점" : "가맹 접수 관리"}
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {props.mode === "large_franchise"
+              ? "대형 가맹점으로 지정한 접수 건을 모아봅니다."
+              : "가맹 접수부터 기술지원 이관과 설치 완료까지 관리합니다."}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={props.onNewExisting} className={secondaryButton}>
+            <PlusIcon className="size-3.5" />
+            전환·승계·명변 접수
+          </button>
+          <button type="button" onClick={props.onNew} className={primaryButton}>
+            <PlusIcon className="size-3.5" />
+            신규 접수
+          </button>
+        </div>
+      </div>
+
+      {props.mode !== "large_franchise" && (
+        <div className="flex items-stretch gap-2.5">
+          <div className="min-w-0 flex-[0.85]">
+            <RateBadge
+              title="접수 성공률"
+              description="접수 등록 건 중 카드가맹접수/심사접수완료 단계 이상에 도달한 비율"
+              icon={PercentIcon}
+              tone="fuchsia"
+              variant="flat"
+              stats={[
+                {
+                  rate: props.successRateStats.rate,
+                  label: "선택 기간",
+                  detail: `${props.successRateStats.success}/${props.successRateStats.total}건`,
+                },
+              ]}
+              controls={
+                <div className="flex w-full items-center justify-end gap-1">
+                  <DatePickerField
+                    ariaLabel="성공률 시작일"
+                    value={props.successRateFrom}
+                    onChange={props.onSuccessRateFromChange}
+                    className="h-[22px] w-[78px] rounded-md px-1 text-[10px]"
+                  />
+                  <span className="text-muted-foreground text-[10px]">~</span>
+                  <DatePickerField
+                    ariaLabel="성공률 종료일"
+                    value={props.successRateTo}
+                    onChange={props.onSuccessRateToChange}
+                    className="h-[22px] w-[78px] rounded-md px-1 text-[10px]"
+                  />
+                </div>
+              }
+            />
+          </div>
+          <div className="border-border bg-card shadow-card flex flex-1 flex-col gap-3 rounded-xl border p-4">
+            <button
+              type="button"
+              onClick={() => props.onKpiChange("today_received")}
+              className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded-lg text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <span className="flex size-6.5 items-center justify-center rounded-full bg-blue-500/12 text-blue-600">
+                  <FileTextIcon className="size-3.5" />
+                </span>
+                접수
+              </span>
+              <ChevronRightIcon className="text-muted-foreground size-4" />
+            </button>
+            <div className="flex items-stretch gap-3.5">
+              <button
+                type="button"
+                onClick={() => props.onKpiChange("today_received")}
+                className="focus-visible:ring-primary/30 flex flex-1 flex-col gap-1 rounded-lg text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <span className="text-muted-foreground text-xs">오늘 접수</span>
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold text-blue-600">
+                    {props.stageStats.todayReceived}
+                  </span>
+                  {trendBadge(props.stageStats.todayReceivedTrend)}
+                </span>
+              </button>
+              <span className="border-border w-px border-l" />
+              <div className="flex flex-1 flex-col justify-between gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => props.onKpiChange("doc_waiting")}
+                  className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded text-left text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <ClockIcon className="size-3 text-amber-500" />
+                    서류 대기
+                  </span>
+                  <span className="ml-2 font-bold">{props.stageStats.docWaiting}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onKpiChange("doc_incomplete")}
+                  className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded text-left text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <FileWarningIcon className="size-3 text-red-500" />
+                    서류 미비
+                  </span>
+                  <span className="ml-2 font-bold">{props.stageStats.docIncomplete}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => props.onKpiChange("reviewing")}
+            className="border-border bg-card shadow-card hover:border-primary/40 focus-visible:border-primary focus-visible:ring-primary/30 flex flex-[0.65] flex-col gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <span className="flex items-center justify-between">
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <span className="flex size-6.5 items-center justify-center rounded-full bg-purple-500/12 text-purple-600">
+                  <SearchIcon className="size-3.5" />
+                </span>
+                진행
+              </span>
+              <ChevronRightIcon className="text-muted-foreground size-4" />
+            </span>
+            <span className="flex flex-col gap-1">
+              <span className="text-muted-foreground text-xs">심사 중</span>
+              <span className="text-2xl font-bold text-purple-600">
+                {props.stageStats.reviewing}
+              </span>
+            </span>
+          </button>
+
+          <div className="border-border bg-card shadow-card flex flex-1 flex-col gap-3 rounded-xl border p-4">
+            <button
+              type="button"
+              onClick={() => props.onKpiChange("today_completed")}
+              className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded-lg text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            >
+              <span className="flex items-center gap-2 text-sm font-bold">
+                <span className="flex size-6.5 items-center justify-center rounded-full bg-emerald-500/12 text-emerald-600">
+                  <CheckIcon className="size-3.5" />
+                </span>
+                종료
+              </span>
+              <ChevronRightIcon className="text-muted-foreground size-4" />
+            </button>
+            <div className="flex items-stretch gap-3.5">
+              <button
+                type="button"
+                onClick={() => props.onKpiChange("today_completed")}
+                className="focus-visible:ring-primary/30 flex flex-1 flex-col gap-1 rounded-lg text-left transition-colors focus-visible:ring-2 focus-visible:outline-none"
+              >
+                <span className="text-muted-foreground text-xs">오늘 완료</span>
+                <span className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold text-emerald-600">
+                    {props.stageStats.todayCompleted}
+                  </span>
+                  {trendBadge(props.stageStats.todayCompletedTrend)}
+                </span>
+              </button>
+              <span className="border-border w-px border-l" />
+              <div className="flex flex-1 flex-col justify-between gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => props.onTableViewChange("canceled")}
+                  className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded text-left text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <XCircleIcon className="size-3 text-rose-500" />
+                    접수 취소
+                  </span>
+                  <span className="ml-2 font-bold">{props.stageStats.canceled}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => props.onKpiChange("persistent_absence")}
+                  className="hover:text-primary focus-visible:ring-primary/30 flex items-center justify-between rounded text-left text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="text-muted-foreground flex items-center gap-1.5">
+                    <UserXIcon className="size-3 text-orange-500" />
+                    지속적 부재
+                  </span>
+                  <span className="ml-2 font-bold">{props.stageStats.persistentAbsence}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {props.mode !== "large_franchise" && (
+        <div className="border-border bg-card flex flex-wrap items-center gap-4 rounded-xl border px-4 py-3">
+          <span className="flex items-center gap-2 text-sm font-bold whitespace-nowrap">
+            <span className="flex size-6.5 items-center justify-center rounded-full bg-blue-500/12 text-blue-600">
+              <PercentIcon className="size-3.5" />
+            </span>
+            전체 진행 현황
+          </span>
+          <span className="text-muted-foreground text-xs whitespace-nowrap tabular-nums">
+            {props.stageStats.approvedTotal} / {props.stageStats.total}건
+          </span>
+          <div className="bg-muted relative h-1.5 min-w-24 flex-1 overflow-hidden rounded-full">
+            <div
+              className="absolute inset-y-0 left-0 rounded-full bg-blue-500"
+              style={{ width: `${props.stageStats.overallCompletionRate}%` }}
+            />
+          </div>
+          <span className="text-sm font-bold whitespace-nowrap tabular-nums">
+            {props.stageStats.overallCompletionRate}%
+          </span>
+          <span className="bg-emerald-500/12 text-emerald-700 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold whitespace-nowrap">
+            <TrophyIcon className="size-3.5" />
+            오늘 완료율{" "}
+            {props.stageStats.todayCompletionRate === null
+              ? "-"
+              : `${props.stageStats.todayCompletionRate}%`}
+          </span>
+        </div>
+      )}
+
+      <div className="border-border bg-card flex flex-col gap-2.5 rounded-xl border p-3.5">
+        <div className="flex items-center gap-2">
+          <div className="relative w-full max-w-80">
+            <SearchIcon className="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+            <input
+              aria-label="통합 검색"
+              placeholder="상호명, 대표자, 연락처, 사업자번호 통합 검색"
+              value={props.search}
+              onChange={(event) => props.onSearchChange(event.target.value)}
+              className="border-border bg-card text-foreground placeholder:text-muted-foreground focus-visible:ring-primary/30 h-9 w-full rounded-lg border pr-3 pl-8 text-sm outline-none focus-visible:ring-2"
+            />
+          </div>
+          <div className="relative w-full max-w-64">
+            <StickyNoteIcon className="text-muted-foreground absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2" />
+            <input
+              aria-label="비고 내용 검색"
+              placeholder="비고 내용 검색"
+              value={props.memoSearch}
+              onChange={(event) => props.onMemoSearchChange(event.target.value)}
+              className="border-border bg-card text-foreground placeholder:text-muted-foreground focus-visible:ring-primary/30 h-9 w-full rounded-lg border pr-3 pl-8 text-sm outline-none focus-visible:ring-2"
+            />
+          </div>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((value) => !value)}
+            className={`${secondaryButton} h-8 px-3 text-xs`}
+          >
+            <ListFilterIcon className="size-3.5" />
+            고급 필터
+            <ChevronDownIcon
+              className={`size-3 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+            />
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-2.5">
+          {(
+            [
+              {
+                value: "" as const,
+                label: "전체",
+                count: props.vanGroupCounts.all,
+                tone: "all" as const,
+              },
+              {
+                value: "toss" as const,
+                label: VAN_GROUP_LABEL.toss,
+                count: props.vanGroupCounts.toss,
+                tone: "toss" as const,
+              },
+              {
+                value: "kicc" as const,
+                label: VAN_GROUP_LABEL.kicc,
+                count: props.vanGroupCounts.kicc,
+                tone: "kicc" as const,
+              },
+            ] satisfies {
+              value: VanGroup | "";
+              label: string;
+              count: number;
+              tone: keyof typeof VAN_TONE;
+            }[]
+          ).map(({ value, label, count, tone }) => {
+            const active = props.vanGroupFilter === value;
+            return (
+              <button
+                key={value || "all"}
+                type="button"
+                onClick={() => props.onVanGroupFilterChange(value)}
+                className={`flex flex-col gap-1 rounded-xl border-2 px-4 py-3 text-left transition-colors ${VAN_TONE[tone][active ? "activeBox" : "idleBox"]}`}
+              >
+                <span
+                  className={`inline-flex items-center gap-1.5 text-[13px] font-semibold ${VAN_TONE[tone][active ? "activeLabel" : "idleLabel"]}`}
+                >
+                  {tone !== "all" && (
+                    <span className={`size-2 shrink-0 rounded-full ${VAN_TONE[tone].dot}`} />
+                  )}
+                  {label}
+                </span>
+                <span
+                  className={`text-[26px] leading-none font-bold tabular-nums ${VAN_TONE[tone][active ? "activeValue" : "idleValue"]}`}
+                >
+                  {count.toLocaleString()}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {advancedOpen && (
+          <div className="border-border flex flex-wrap items-center gap-2 border-t pt-2.5">
+            <div className="w-40">
+              <AppSelect
+                aria-label="상태"
+                value={props.statusFilter}
+                onValueChange={props.onStatusFilterChange}
+                options={[
+                  { value: "", label: "전체" },
+                  ...STATUS_OPTIONS.map((status) => ({
+                    value: status,
+                    label: FRANCHISE_STATUS_LABEL[status],
+                  })),
+                ]}
+              />
+            </div>
+            {props.mode !== "large_franchise" && (
+              <div className="w-32">
+                <AppSelect
+                  aria-label="대형 여부"
+                  value={props.largeFilter}
+                  onValueChange={props.onLargeFilterChange}
+                  options={[
+                    { value: "", label: "대형 전체" },
+                    { value: "normal", label: "일반" },
+                    { value: "large", label: "대형" },
+                  ]}
+                />
+              </div>
+            )}
+            <div className="w-40">
+              <AppSelect
+                aria-label="사업자 유형"
+                value={props.applicantTypeFilter}
+                onValueChange={props.onApplicantTypeFilterChange}
+                options={[
+                  { value: "", label: "사업자 유형 전체" },
+                  ...(Object.keys(APPLICANT_TYPE_LABEL) as ApplicantType[]).map((type) => ({
+                    value: type,
+                    label: APPLICANT_TYPE_LABEL[type],
+                  })),
+                ]}
+              />
+            </div>
+            <div className="w-32">
+              <AppSelect
+                aria-label="채널"
+                value={props.channelFilter}
+                onValueChange={props.onChannelFilterChange}
+                options={[
+                  { value: "", label: "채널 전체" },
+                  ...(Object.keys(FRANCHISE_CHANNEL_LABEL) as FranchiseChannel[]).map((c) => ({
+                    value: c,
+                    label: FRANCHISE_CHANNEL_LABEL[c],
+                  })),
+                  { value: "none", label: "경로 미지정" },
+                ]}
+              />
+            </div>
+            <div className="w-32">
+              <AppSelect
+                aria-label="구분"
+                value={props.caseTypeFilter}
+                onValueChange={props.onCaseTypeFilterChange}
+                options={[
+                  { value: "", label: "구분 전체" },
+                  ...(Object.keys(FRANCHISE_CASE_TYPE_LABEL) as FranchiseCaseType[]).map((c) => ({
+                    value: c,
+                    label: FRANCHISE_CASE_TYPE_LABEL[c],
+                  })),
+                ]}
+              />
+            </div>
+            <div className="w-32">
+              <AppSelect
+                aria-label="통화 부재 횟수"
+                value={props.missedCallFilter}
+                onValueChange={props.onMissedCallFilterChange}
+                options={[
+                  { value: "", label: "통화부재 전체" },
+                  { value: "1", label: "통화부재 1회" },
+                  { value: "2", label: "통화부재 2회" },
+                  { value: "3", label: "통화부재 3회" },
+                ]}
+              />
+            </div>
+            <div className="w-32" title="인터넷 필터 기능 추가 필요">
+              <AppSelect
+                aria-label="인터넷"
+                value="all"
+                onValueChange={() => {}}
+                disabled
+                options={[
+                  { value: "all", label: "인터넷 전체" },
+                  { value: "3S", label: "3S" },
+                  { value: "백메가", label: "백메가" },
+                  { value: "엑티브", label: "엑티브" },
+                ]}
+              />
+            </div>
+            <div className="w-32">
+              <AppSelect
+                aria-label="VAN사"
+                value={props.vanFilter}
+                onValueChange={props.onVanFilterChange}
+                options={[
+                  { value: "", label: "VAN사 전체" },
+                  ...VAN_COMPANIES.map((v) => ({ value: v, label: v })),
+                ]}
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <DatePickerField
+                ariaLabel="접수일 시작"
+                value={props.dateFrom}
+                onChange={props.onDateFromChange}
+                className="w-[130px]"
+              />
+              <span className="text-muted-foreground text-xs">~</span>
+              <DatePickerField
+                ariaLabel="접수일 종료"
+                value={props.dateTo}
+                onChange={props.onDateToChange}
+                className="w-[130px]"
+              />
+            </div>
+            <div className="w-32">
+              <AppSelect
+                aria-label="정렬"
+                value={props.sortBy === "created_at" ? "latest" : props.sortBy}
+                onValueChange={(value) => {
+                  if (value !== "oldest") props.onSortChange(value as SortBy);
+                }}
+                options={[
+                  { value: "latest", label: "등록일순" },
+                  { value: "oldest", label: "오래된순", disabled: true },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="border-border flex items-center justify-between border-b">
+        <div role="tablist" aria-label="가맹 접수 상태 필터" className="flex items-center gap-1">
+          {tabs.map((tab) => {
+            const active = tab.key === activeTab;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => tab.view && props.onTableViewChange(tab.view, tab.kpi)}
+                className={`-mb-px flex items-center gap-1.5 border-b-2 px-3.5 py-2.5 text-sm whitespace-nowrap disabled:opacity-50 ${active ? "border-primary text-primary font-bold" : "text-muted-foreground border-transparent font-medium"}`}
+              >
+                <span>{tab.label}</span>
+                <span
+                  className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11.5px] leading-none font-bold ${active ? "bg-primary-muted text-primary" : "bg-muted text-muted-foreground"}`}
+                >
+                  {tab.count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 pb-2.5">
+          <span className="text-foreground text-sm font-semibold">
+            전체 {props.filteredCount}건
+          </span>
+          {activeTab === "canceled" && (
+            <button
+              type="button"
+              onClick={props.onExcelDownload}
+              disabled={props.filteredCount === 0}
+              className="border-border bg-card text-foreground hover:bg-muted focus-visible:ring-primary/30 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors outline-none focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50"
+            >
+              <DownloadIcon className="size-3.5" />
+              엑셀 받기
+            </button>
+          )}
+          <button type="button" title="도움말" onClick={props.onHelp} className={iconButton}>
+            <CircleHelpIcon className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      {props.archivedNotice}
+
+      <div className="border-border bg-card shrink-0 overflow-hidden rounded-xl border">
+        <div className="overflow-x-auto rounded-t-xl">
+          <table className="w-full min-w-[1610px] border-collapse text-[12.5px]">
+            <thead>
+              <tr className="bg-surface-subtle border-border border-b">
+                <th className="w-10 px-3 py-2.5 text-left">
+                  <input
+                    aria-label="전체 선택"
+                    type="checkbox"
+                    checked={props.allChecked}
+                    onChange={props.onToggleAll}
+                    className="accent-primary size-[15px] cursor-pointer"
+                  />
+                </th>
+                <th className="w-11 px-1 py-2.5 text-left">
+                  <button
+                    type="button"
+                    aria-label="확인일 색상 정렬"
+                    onClick={() => props.onColumnSortChange("next_check_color")}
+                    className="text-muted-foreground hover:text-foreground inline-flex items-center"
+                  >
+                    {columnSortIndicator(props.columnSort, "next_check_color")}
+                  </button>
+                </th>
+                {SORTABLE_HEADERS.map(({ label, key }) => (
+                  <th
+                    key={key}
+                    className="text-muted-foreground px-2.5 py-2.5 text-left font-semibold whitespace-nowrap"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => props.onColumnSortChange(key)}
+                      className="hover:text-foreground inline-flex items-center gap-0.5"
+                    >
+                      {label}
+                      {columnSortIndicator(props.columnSort, key)}
+                    </button>
+                  </th>
+                ))}
+                {["비고", "메모"].map((label) => (
+                  <th
+                    key={label}
+                    className="text-muted-foreground px-2.5 py-2.5 text-left font-semibold whitespace-nowrap"
+                  >
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {props.rows.length === 0 && (
+                <tr className="border-border border-b">
+                  <td
+                    colSpan={15}
+                    style={{ height: 50 * 49 }}
+                    className="text-muted-foreground text-center text-sm"
+                  >
+                    조건에 맞는 접수 건이 없습니다.
+                  </td>
+                </tr>
+              )}
+              {props.rows.map((row) => {
+                const tone = statusTone(row.status);
+                const memos = pinnedMemoEntries(row.memo);
+                return (
+                  <tr
+                    key={row.id}
+                    className={`border-border border-b ${props.selected.has(row.id) ? "bg-primary-muted" : ""}`}
+                  >
+                    <td className="px-3 py-2.5">
+                      <input
+                        aria-label={`${row.business_name || row.owner_name || "접수"} 선택`}
+                        type="checkbox"
+                        checked={props.selected.has(row.id)}
+                        onChange={() => props.onToggleRow(row.id)}
+                        className="accent-primary size-[15px] cursor-pointer"
+                      />
+                    </td>
+                    <td className="px-1 py-1.5 text-center">
+                      <button
+                        type="button"
+                        onClick={() => props.onToggleLargeFranchise(row)}
+                        aria-label={`${row.business_name || row.owner_name || "접수"} ${props.mode === "large_franchise" ? "가맹접수로 되돌리기" : "대형 가맹점으로 이동"}`}
+                        title={
+                          props.mode === "large_franchise"
+                            ? "가맹접수로 되돌리기"
+                            : "대형 가맹점으로 이동"
+                        }
+                        aria-pressed={props.mode === "large_franchise"}
+                        className="text-muted-foreground hover:text-foreground inline-flex size-8 items-center justify-center rounded-md transition-colors"
+                      >
+                        <Star
+                          className={`size-4 ${props.mode === "large_franchise" ? "fill-current text-amber-400" : ""}`}
+                        />
+                      </button>
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <DatePickerField
+                        ariaLabel="접수일"
+                        value={row.reception_date ?? ""}
+                        onChange={(value) => props.onSaveField(row, "reception_date", value)}
+                        className="h-auto border-none bg-transparent px-0 text-[12.5px]"
+                      />
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <DatePickerField
+                        ariaLabel="오픈 예정일"
+                        value={row.open_date ?? ""}
+                        onChange={(value) => props.onSaveField(row, "open_date", value)}
+                        className="h-auto border-none bg-transparent px-0 text-[12.5px]"
+                      />
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <AppSelect
+                        aria-label="채널"
+                        value={row.channel ?? ""}
+                        onValueChange={(value) => props.onSaveField(row, "channel", value)}
+                        className="text-foreground h-auto border-none bg-transparent py-0 pr-6 pl-0 text-[12.5px]"
+                        options={[
+                          { value: "", label: "미지정" },
+                          ...(Object.keys(FRANCHISE_CHANNEL_LABEL) as FranchiseChannel[]).map(
+                            (c) => ({
+                              value: c,
+                              label: FRANCHISE_CHANNEL_LABEL[c],
+                            }),
+                          ),
+                        ]}
+                      />
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <span className="text-foreground text-[12.5px]">
+                        {row.case_type ? FRANCHISE_CASE_TYPE_LABEL[row.case_type] : "미지정"}
+                      </span>
+                      {(row.is_rental || row.is_installment) && (
+                        <span className="text-muted-foreground ml-1 text-[11px]">
+                          {[row.is_rental && "렌탈", row.is_installment && "할부"]
+                            .filter(Boolean)
+                            .join("·")}
+                        </span>
+                      )}
+                    </td>
+                    <td className="max-w-[200px] px-2.5 py-2.5 font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => props.onOpenDetail(row)}
+                        className="text-foreground hover:text-primary flex w-full items-center text-left"
+                      >
+                        <span className="min-w-0 truncate">{row.business_name || "-"}</span>
+                        {props.mode !== "large_franchise" && row.is_large_franchise && (
+                          <span className="ml-1.5 shrink-0 rounded-md border border-violet-300 bg-violet-100 px-1.5 py-0.5 text-[11px] font-bold text-violet-700">
+                            대형
+                          </span>
+                        )}
+                      </button>
+                      <VanBadge value={row.van_company} className="mt-0.5 max-w-full truncate" />
+                    </td>
+                    <td className="text-foreground px-2.5 py-2.5 whitespace-nowrap">
+                      {row.owner_name || "-"}
+                    </td>
+                    <td className="text-foreground px-2.5 py-2.5 whitespace-nowrap">
+                      <div className="flex flex-col items-start gap-0.5">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className="cursor-pointer"
+                            onClick={() => row.phone && navigator.clipboard?.writeText(row.phone)}
+                            title="클릭하여 복사"
+                          >
+                            {row.phone || "-"}
+                          </span>
+                          {row.phone && (
+                            <button
+                              type="button"
+                              onClick={() => props.onOpenCall(row.id)}
+                              aria-label={`${row.business_name || row.owner_name || "접수"} 통화기록`}
+                              title={`통화기록 · 부재 ${row.missed_call_count ?? 0}/3 · 완료 ${row.completed_call_count ?? 0}회`}
+                              className={`shrink-0 rounded p-0.5 hover:bg-slate-100 ${(row.missed_call_count ?? 0) > 0 ? "text-red-500" : "text-muted-foreground"}`}
+                            >
+                              <PhoneCallIcon size={13} />
+                            </button>
+                          )}
+                        </span>
+                        {row.last_call_at &&
+                          row.last_call_type &&
+                          row.status !== "toss_review_done" &&
+                          row.status !== "completed" && (
+                            <span
+                              className={`text-[11px] font-medium ${row.last_call_type === "completed" ? "text-green-600" : "text-red-500"}`}
+                            >
+                              최근 통화: {formatLastCallAt(row.last_call_at)}
+                            </span>
+                          )}
+                      </div>
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <AppSelect
+                        aria-label="담당자"
+                        value={row.cs_id ?? ""}
+                        onValueChange={(value) => props.onCsChange(row, value)}
+                        className="text-foreground h-auto border-none bg-transparent py-0 pr-6 pl-0 text-[12.5px]"
+                        options={[
+                          { value: "", label: "미배정" },
+                          ...props.csProfiles.map((profile) => ({
+                            value: profile.id,
+                            label: profile.name,
+                          })),
+                        ]}
+                      />
+                    </td>
+                    <td
+                      className={`px-2.5 py-2.5 font-semibold whitespace-nowrap ${props.linkedInternets[row.id] ? "text-green-500" : "text-muted-foreground"}`}
+                    >
+                      {props.linkedInternets[row.id]?.category || row.internet || "-"}
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      <AppSelect
+                        aria-label="상태"
+                        value={row.status}
+                        disabled={props.busyId === row.id}
+                        onValueChange={(value) =>
+                          props.onStatusChange(row, value as FranchiseStatus)
+                        }
+                        className={`h-auto rounded-md border-none px-2.5 py-1.5 text-[11.5px] font-semibold ${tone.pill}`}
+                        options={STATUS_OPTIONS.map((status) => ({
+                          value: status,
+                          label: FRANCHISE_STATUS_LABEL[status],
+                        }))}
+                      />
+                    </td>
+                    <td className="px-2.5 py-2.5 whitespace-nowrap">
+                      {(() => {
+                        const severity = nextCheckSeverity(row.next_check_date, props.todayDate);
+                        const badgeClass = nextCheckBadgeClass(severity);
+                        return (
+                          <DatePickerField
+                            ariaLabel="확인일"
+                            value={row.next_check_date ?? ""}
+                            onChange={(value) => props.onSaveNextCheckDate(row, value)}
+                            className={`h-auto rounded-full px-2.5 py-1 text-[11.5px] ${badgeClass}`}
+                          />
+                        );
+                      })()}
+                    </td>
+                    <td className="text-foreground min-w-[140px] px-2.5 py-2.5">
+                      {memos.length > 0 ? (
+                        <ul className="list-disc space-y-0.5 pl-4">
+                          {memos.map((entry, index) => (
+                            <li key={index} className="break-words whitespace-pre-wrap">
+                              {entry}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="px-2.5 py-2.5 align-middle" title={row.memo || "메모 없음"}>
+                      <button
+                        type="button"
+                        onClick={() => props.onOpenMemo(row.id)}
+                        aria-label={`${row.business_name || row.owner_name || "접수"} 메모`}
+                        className="mx-auto block"
+                      >
+                        <StickyNoteIcon
+                          className={`size-4 ${row.memo ? "text-muted-foreground" : "text-border"}`}
+                        />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {props.rows.length > 0 &&
+                Array.from({ length: Math.max(0, 50 - props.rows.length) }).map((_, index) => (
+                  <tr key={`filler-${index}`} aria-hidden="true" className="border-border border-b">
+                    <td colSpan={14} style={{ height: 49 }} />
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="border-border bg-card sticky bottom-0 z-10 flex min-h-14 items-center justify-between gap-3.5 rounded-xl border px-4 py-2.5 shadow-[0_-2px_8px_rgba(0,0,0,0.08)]">
+        {props.selected.size > 0 ? (
+          <div className="border-border bg-card shadow-card flex flex-wrap items-center gap-3 rounded-lg border px-3.5 py-2">
+            <span className="text-foreground text-sm font-semibold">
+              {props.selected.size}건 선택됨
+            </span>
+            {props.selected.size < props.filteredCount && (
+              <button
+                type="button"
+                onClick={props.onSelectAllFiltered}
+                className="text-primary text-xs font-semibold hover:underline"
+              >
+                필터링된 전체 {props.filteredCount}건 선택
+              </button>
+            )}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={props.onBulkStatus}
+                className={`${secondaryButton} h-8 px-3 text-xs`}
+              >
+                일괄 상태 변경
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkAssign}
+                className={`${secondaryButton} h-8 px-3 text-xs`}
+              >
+                일괄 배정
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkDelete}
+                className="border-error/30 bg-error/10 text-error hover:bg-error/20 h-8 rounded-lg border px-3 text-xs font-semibold"
+              >
+                선택 삭제
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkTransfer}
+                className={`${primaryButton} h-8 px-3 text-xs`}
+              >
+                기술지원 이관
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div />
+        )}
+        <div className="flex items-center gap-3.5">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              aria-label="이전 페이지"
+              disabled={props.page <= 1}
+              onClick={() => props.onPageChange(Math.max(1, props.page - 1))}
+              className={`${buttonBase} border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground size-9 p-0`}
+            >
+              <ChevronLeftIcon className="size-3.5" />
+            </button>
+            {pageRange(props.page, props.totalPages).map((page) => (
+              <button
+                key={page}
+                type="button"
+                aria-current={page === props.page ? "page" : undefined}
+                onClick={() => props.onPageChange(page)}
+                className={`flex size-7 items-center justify-center rounded-md border text-xs font-semibold ${page === props.page ? "border-primary bg-primary text-primary-foreground" : "border-border text-foreground hover:bg-muted"}`}
+              >
+                {page}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-label="다음 페이지"
+              disabled={props.page >= props.totalPages}
+              onClick={() => props.onPageChange(Math.min(props.totalPages, props.page + 1))}
+              className={`${buttonBase} border-transparent bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground size-9 p-0`}
+            >
+              <ChevronRightIcon className="size-3.5" />
+            </button>
+          </div>
+          <AppSelect
+            aria-label="페이지당 표시 개수"
+            value="50"
+            onValueChange={() => {}}
+            disabled
+            className="h-8 w-auto py-0 text-xs"
+            options={[
+              { value: "10", label: "10개씩 보기" },
+              { value: "20", label: "20개씩 보기" },
+              { value: "50", label: "50개씩 보기" },
+            ]}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
