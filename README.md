@@ -1,12 +1,27 @@
-# merchant-ops-system — 가맹점 운영 관리 시스템
+<div align="center">
 
-> POS 설치·운영 대행사의 가맹 접수 → 심사 → 설치 → 인터넷 개통 → 사후관리(CS)를 한곳에서 처리하는 사내 운영 시스템
+# merchant-ops-system
+
+**가맹점 운영 관리 시스템**
+
+POS 설치·운영 대행사의 가맹 접수 → 심사 → 설치 → 인터넷 개통 → 사후관리(CS)를 한곳에서 처리하는 사내 운영 시스템
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=nextdotjs&logoColor=white) ![React](https://img.shields.io/badge/React-19-20232A?style=flat-square&logo=react&logoColor=white) ![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=flat-square&logo=tailwindcss&logoColor=white) ![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?style=flat-square&logo=supabase&logoColor=white) ![Vercel](https://img.shields.io/badge/Vercel-deploy-000000?style=flat-square&logo=vercel&logoColor=white)
 
-- **문제**: 가맹 접수부터 설치, 인터넷 개통, CS까지의 업무가 엑셀 CRM 대장, 인터넷 관리대장, 메신저에 흩어져 있었다.
-- **해결**: 업무 흐름을 하나의 웹 시스템으로 옮겨 CS·기술지원·관리자가 각자 화면에서 일하고, 결과가 가맹점 단위 기록으로 모이게 했다.
-- **내 역할**: 2인 팀의 주 개발자로 초기 설계와 모든 기능 모듈의 최초 구현을 맡았다(커밋 91.7%, 현재 코드 라인 89.8%).
+[핵심 기술 과제](#핵심-기술-과제와-해결) · [아키텍처](#아키텍처) · [실행 방법](#실행-방법) · [회고](#회고와-개선-과제)
+
+</div>
+
+|       기간        |       역할       |          규모           |                테스트                 |  배포  |
+| :---------------: | :--------------: | :---------------------: | :-----------------------------------: | :----: |
+| 2026.06 – 2026.09 | 2인 팀 · 주 개발 | 원본 커밋 832 · 화면 44 | 자동화 테스트 없음 · 타입 검사 · 린트 | Vercel |
+
+> [!IMPORTANT]
+> **문제** — 가맹 접수부터 설치, 인터넷 개통, CS까지의 업무가 엑셀 CRM 대장, 인터넷 관리대장, 메신저에 흩어져 있었다.
+>
+> **해결** — 업무 흐름을 하나의 웹 시스템으로 옮겨 CS·기술지원·관리자가 각자 화면에서 일하고, 결과가 가맹점 단위 기록으로 모이게 했다.
+>
+> **내 역할** — 2인 팀의 주 개발자로 초기 설계와 모든 기능 모듈의 최초 구현을 맡았다(커밋 91.7%, 현재 코드 라인 89.8%).
 
 ## 프로젝트 개요
 
@@ -50,6 +65,9 @@
 - 캘린더 범례 필터, 인터넷 개통 3S/백메가(인터넷 대행사) 구분.
 - 개발 도구: Prettier, Husky, lint-staged, 커밋 메시지 검사, `docs/commit-convention.md`, `docs/dev-environment.md`, 마이그레이션 번호 체계.
 
+<details>
+<summary><b>동료 비중이 높은 폴더 펼치기</b></summary>
+
 현재 코드에서 동료 비중이 높은 폴더는 다음과 같다.
 
 | 폴더                                                                               | 동료 비중 |
@@ -64,6 +82,8 @@
 | `src/app/(app)/internet/`                                                          | 14%       |
 
 `src/app/(app)/` 아래의 `tickets/`, `tech-dashboard/`, `overview/`, `cs-report/`, `approvals/`, `admin/`, `blueprints/`, `inventory/`, `dashboard/`는 동료 비중이 0~1%이고, `supabase/`는 4%다.
+
+</details>
 
 **본인 담당 영역**
 
@@ -137,6 +157,14 @@ flowchart LR
 
 ## 핵심 기술 과제와 해결
 
+|  #  | 과제                                                                                                          | 핵심 기법                                                                                                                         |
+| :-: | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+|  1  | [권한·결재 판정 단일화와 결재 잠금 방지](#1-권한결재-판정-단일화와-결재-잠금-방지)                            | 직급 판정을 `installApproval.ts` 한 파일의 함수로 모으기 · 팀장급 이상 건은 1차 승인 건너뛰기 · `master`·`admin` 안전망           |
+|  2  | [재고 수량 동시성과 중복 차감 방지](#2-재고-수량-동시성과-중복-차감-방지)                                     | `quantity = quantity + delta` 원자적 반영 · `installation_id` 이력이 있으면 통째로 건너뛰기 · 저장할 때 가용 재고와 비교          |
+|  3  | [PostgREST의 조용한 1000행 절단과 URL 길이 한계 대응](#3-postgrest의-조용한-1000행-절단과-url-길이-한계-대응) | `fetchAllRows`로 끝까지 읽고 `truncated` 플래그 · `id`를 마지막 정렬 키로 덧붙이기 · `fetchByIdChunks`로 ID 150개씩 조회          |
+|  4  | [인입내역 품질 판정: 규칙과 LLM 혼합](#4-인입내역-품질-판정-규칙과-llm-혼합)                                  | 규칙과 모델로 판정 분리 · 상호·대표자명과 번호를 가린 뒤 호출 · 실패하면 규칙 판정으로 폴백                                       |
+|  5  | [원격 리전 지연 분석과 성능 개선](#5-원격-리전-지연-분석과-성능-개선)                                         | 원인을 거리·조회량·인증 왕복으로 분리 · React `cache`로 요청당 1회 · 가맹접수 기본 조회를 진행 중 건과 최근 30일 갱신 건으로 축소 |
+
 ### 1. 권한·결재 판정 단일화와 결재 잠금 방지
 
 - **문제**: 설치완료 결재는 팀장(1차)과 실장(최종) 두 단계인데, 판정이 화면과 서버에 따로 있으면 버튼은 보이는데 누르면 에러가 난다. 팀장이 올린 건은 요청자와 1차 승인 담당이 같은 사람이 되고 요청자 본인 승인은 막혀 있어, 다른 팀장이 없으면 요청이 `requested`에서 멈추고 재요청도 막혔다. 직급이 비면 모든 판정이 0점이 되어 아무도 결재를 못 푸는 잠금도 생길 수 있었다.
@@ -204,12 +232,17 @@ erDiagram
 3. 새 Supabase 프로젝트의 SQL Editor에서 `supabase/*.sql`을 번호순으로 실행한다.
 4. `npm run dev`로 개발 서버를 띄우고 http://localhost:3000 에서 확인한다.
 
+<details>
+<summary><b>SQL 실행 시 유의할 점 펼치기</b></summary>
+
 SQL을 실행할 때 유의할 점은 다음과 같다.
 
 - 번호가 비어 있는 014, 016, 025, 033~035, 058, 135, 150은 공개용으로 정리하면서 뺀 운영 데이터 이관 파일이다.
 - `129_audit_log_actor_name_rollback.sql`은 129를 되돌리는 스크립트이므로 실행하지 않는다. 번호가 없는 `installations_contact_name_migration.sql`은 컬럼을 추가하는 파일이라 함께 실행한다.
 - `installations`의 기반 CREATE 문은 저장소에 없다(021이 처음 ALTER 한다). 빈 프로젝트에서 재현하려면 이 테이블을 먼저 만들어야 한다.
 - 시드 계정은 없다. Supabase Auth에 사용자를 만들고 같은 id의 `profiles` 행(이름·역할·팀)을 넣어야 이름 로그인이 된다. 이후 직원은 직원 관리 화면에서 만든다.
+
+</details>
 
 `.env` 없이 `npm run build`를 하면 페이지 데이터 수집 단계에서 `supabaseUrl is required`로 실패한다. 자격증명이 없는 환경에서는 정상이며, 코드 검증은 `npx tsc --noEmit`으로 한다. 개발용 Supabase 프로젝트와 환경 변수 설명은 [docs/dev-environment.md](docs/dev-environment.md)(동료 개발자 작성)에 있다.
 
@@ -226,6 +259,9 @@ SQL을 실행할 때 유의할 점은 다음과 같다.
 커밋 훅(husky)은 동료 개발자가 도입했다. pre-commit은 lint-staged(prettier)를, commit-msg는 커밋 메시지 형식 검사를 돌린다. ESLint는 기존 린트 부채 때문에 pre-commit에서 강제하지 않는다. 2026-09-08 전산 점검 시점에 `tsc`와 포맷 검사는 깨끗했고 ESLint는 114건이었다([점검 문서](docs/feature/audit-2026-09-08.md)).
 
 ## 폴더 구조
+
+<details>
+<summary><b>폴더 트리 펼치기</b></summary>
 
 ```
 src/
@@ -247,6 +283,8 @@ scripts/            보조 스크립트 (pdf worker 복사, 커밋 메시지 검
 docs/               개발 규칙과 기능별 설계 기록
 ```
 
+</details>
+
 ### 관련 문서
 
 - [docs/feature/](docs/feature/) — 기능별 설계·작업 기록. 왜 그렇게 만들었는지를 결정 시점에 남겼다(작업 당시 AI 코딩 도구와 함께 작성).
@@ -266,3 +304,11 @@ docs/               개발 규칙과 기능별 설계 기록
 - **서울 리전 이전**: 지연의 근본 원인은 서버와 DB가 시드니에 있다는 점이다. 백업·복원·중단이 따르는 작업이라 보류했고, 옮길 때는 DB와 함수를 함께 옮겨야 한다.
 - **마이그레이션 정리**: 수동으로 적용하는 SQL이 150개 안팎이다. 새 개발 환경이 필요해지는 시점에 라이브 스키마 덤프를 기준으로 클린 스키마 세트를 만들고 기존 파일은 `supabase/archive/`로 옮기는 계획이 [docs/development-rules.md](docs/development-rules.md) 1절에 있다. 지금은 `installations`의 기반 CREATE 문이 저장소에 없어 빈 DB에서 순서대로 실행할 수 없다.
 - **상태값 이중 관리 위험**: 상태값이 `src/types/index.ts`와 SQL `CHECK` 제약에 따로 있어 한쪽만 바꾸면 저장이 실패한다. 2026-09-08 점검에서는 `info_input` 하나가 어긋나 있었다(세 화면 모두 선택지에서 빠져 있어 영향은 없었다).
+
+---
+
+<div align="center">
+
+[다른 프로젝트 보기](https://github.com/pyobonboy) · [pyobon07@naver.com](mailto:pyobon07@naver.com)
+
+</div>
